@@ -30,6 +30,7 @@ from ...core.descriptions import (
     ADDED_IN_36,
     ADDED_IN_310,
     ADDED_IN_314,
+    DEPRECATED_IN_3X_FIELD,
     PREVIEW_FEATURE,
 )
 from ...core.doc_category import DOC_CATEGORY_ORDERS
@@ -101,7 +102,13 @@ class DraftOrderInput(BaseInputObjectType):
         description="ID of a selected shipping method.", name="shippingMethod"
     )
     voucher = graphene.ID(
-        description="ID of the voucher associated with the order.", name="voucher"
+        description="ID of the voucher associated with the order.",
+        name="voucher",
+        deprecation_reason=f"{DEPRECATED_IN_3X_FIELD} Use `voucherCode` instead.",
+    )
+    voucher_code = graphene.ID(
+        description="ID of the voucher code associated with the order.",
+        name="voucherCode",
     )
     customer_note = graphene.String(
         description="A note from a customer. Visible by customers in the order summary."

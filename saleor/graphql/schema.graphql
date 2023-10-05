@@ -11510,6 +11510,7 @@ type Order implements Node & ObjectWithMetadata @doc(category: "Orders") {
   shippingTaxClassPrivateMetadata: [MetadataItem!]!
   token: String! @deprecated(reason: "This field will be removed in Saleor 4.0. Use `id` instead.")
   voucher: Voucher
+  voucherCode: VoucherCode
 
   """List of user gift cards."""
   giftCards: [GiftCard!]!
@@ -24921,6 +24922,9 @@ input DraftOrderCreateInput @doc(category: "Orders") {
   """ID of the voucher associated with the order."""
   voucher: ID
 
+  """ID of the voucher code associated with the order."""
+  voucherCode: ID
+
   """A note from a customer. Visible by customers in the order summary."""
   customerNote: String
 
@@ -25034,6 +25038,9 @@ input DraftOrderInput @doc(category: "Orders") {
 
   """ID of the voucher associated with the order."""
   voucher: ID
+
+  """ID of the voucher code associated with the order."""
+  voucherCode: ID
 
   """A note from a customer. Visible by customers in the order summary."""
   customerNote: String

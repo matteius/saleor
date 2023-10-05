@@ -62,6 +62,16 @@ class VoucherByIdLoader(DataLoader):
         return [vouchers.get(voucher_id) for voucher_id in keys]
 
 
+class VoucherCodeByIdLoader(DataLoader):
+    context_key = "voucher_code_by_id"
+
+    def batch_load(self, keys):
+        voucher_codes = VoucherCode.objects.using(
+            self.database_connection_name
+        ).in_bulk(keys)
+        return [voucher_codes.get(voucher_code_id) for voucher_code_id in keys]
+
+
 class VoucherCodeByCodeLoader(DataLoader):
     context_key = "voucher_code_by_code"
 

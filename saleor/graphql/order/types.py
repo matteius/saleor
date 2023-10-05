@@ -96,9 +96,14 @@ from ..core.types import (
 )
 from ..core.utils import str_to_enum
 from ..decorators import one_of_permissions_required
-from ..discount.dataloaders import OrderDiscountsByOrderIDLoader, VoucherByIdLoader
+from ..discount.dataloaders import (
+    OrderDiscountsByOrderIDLoader,
+    VoucherByIdLoader,
+    VoucherCodeByIdLoader,
+)
 from ..discount.enums import DiscountValueTypeEnum
 from ..discount.types import Voucher
+from ..discount.types.vouchers import VoucherCode
 from ..giftcard.dataloaders import GiftCardsByOrderIdLoader
 from ..giftcard.types import GiftCard
 from ..invoice.dataloaders import InvoicesByOrderIdLoader
@@ -1166,6 +1171,7 @@ class Order(ModelObjectType[models.Order]):
         deprecation_reason=(f"{DEPRECATED_IN_3X_FIELD} Use `id` instead."),
     )
     voucher = graphene.Field(Voucher)
+    voucher_code = graphene.Field(VoucherCode)
     gift_cards = NonNullList(
         GiftCard, description="List of user gift cards.", required=True
     )
@@ -1944,6 +1950,12 @@ class Order(ModelObjectType[models.Order]):
         channel = ChannelByIdLoader(info.context).load(root.channel_id)
 
         return Promise.all([voucher, channel]).then(wrap_voucher_with_channel_context)
+
+    @staticmethod
+    def resolve_voucher_code(root: models.Order, info):
+        if not root.voucher_code_id:
+            return None
+        return VoucherCodeByIdLoader(info.context).load(root.voucher_code_id)
 
     @staticmethod
     def resolve_language_code_enum(root: models.Order, _info):
