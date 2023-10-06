@@ -72,6 +72,7 @@ from ..discount.models import (
     SaleTranslation,
     Voucher,
     VoucherChannelListing,
+    VoucherCode,
     VoucherCustomer,
     VoucherTranslation,
 )
@@ -3893,7 +3894,9 @@ def product_with_images(
 
 @pytest.fixture
 def voucher_without_channel(db):
-    return Voucher.objects.create(code="mirumee")
+    voucher = Voucher.objects.create(code="saleor")
+    VoucherCode.objects.create(code=voucher.code, voucher=voucher)
+    return voucher
 
 
 @pytest.fixture
@@ -3919,7 +3922,7 @@ def voucher_with_many_channels(voucher, channel_PLN):
 @pytest.fixture
 def voucher_percentage(channel_USD):
     voucher = Voucher.objects.create(
-        code="saleor",
+        code="saleor-percentage",
         discount_value_type=DiscountValueType.PERCENTAGE,
     )
     VoucherChannelListing.objects.create(
@@ -3941,7 +3944,7 @@ def voucher_specific_product_type(voucher_percentage, product):
 
 @pytest.fixture
 def voucher_with_high_min_spent_amount(channel_USD):
-    voucher = Voucher.objects.create(code="mirumee")
+    voucher = Voucher.objects.create(code="saleor")
     VoucherChannelListing.objects.create(
         voucher=voucher,
         channel=channel_USD,
@@ -3954,13 +3957,14 @@ def voucher_with_high_min_spent_amount(channel_USD):
 @pytest.fixture
 def voucher_shipping_type(channel_USD):
     voucher = Voucher.objects.create(
-        code="mirumee", type=VoucherType.SHIPPING, countries="IS"
+        code="shipping-voucher", type=VoucherType.SHIPPING, countries="IS"
     )
     VoucherChannelListing.objects.create(
         voucher=voucher,
         channel=channel_USD,
         discount=Money(10, channel_USD.currency_code),
     )
+    VoucherCode.objects.create(code=voucher.code, voucher=voucher)
     return voucher
 
 
