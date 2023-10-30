@@ -84,6 +84,8 @@ DATABASES = {
     #     conn_max_age=600,
     # ),
 }
+# To allow connection pooling to work
+DATABASES['default']['DISABLE_SERVER_SIDE_CURSORS'] = True
 
 DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 
