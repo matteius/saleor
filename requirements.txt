@@ -120,7 +120,7 @@ python-magic-bin==0.4.14 ; python_version >= "3.10" and python_version < "4.0" a
 python-magic==0.4.27 ; python_version >= "3.10" and python_version < "4.0" and sys_platform != "win32"
 pytimeparse==1.1.8 ; python_version >= "3.10" and python_version < "4.0"
 pytz==2024.1 ; python_version >= "3.10" and python_version < "4.0"
-pyxb==1.2.7 ; python_version >= "3.10" and python_version < "4.0"
+pyxb==1.2.6 ; python_version >= "3.10" and python_version < "4.0"
 pyyaml==6.0.1 ; python_version >= "3.10" and python_version < "4.0"
 razorpay==1.4.2 ; python_version >= "3.10" and python_version < "4.0"
 redis==5.0.7 ; python_version >= "3.10" and python_version < "4.0"
