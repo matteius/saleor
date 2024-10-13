@@ -117,6 +117,10 @@ DATABASES = {
         test_options={"MIRROR": DATABASE_CONNECTION_DEFAULT_NAME},
     ),
 }
+# To allow connection pooling to work
+DATABASES['default']['DISABLE_SERVER_SIDE_CURSORS'] = True
+# To allow connection pooling to work
+DATABASES['replica']['DISABLE_SERVER_SIDE_CURSORS'] = True
 
 DATABASE_ROUTERS = ["saleor.core.db_routers.PrimaryReplicaRouter"]
 
@@ -174,7 +178,7 @@ if PUBLIC_URL:
     ENABLE_SSL = urlparse(PUBLIC_URL).scheme.lower() == "https"
 
 if ENABLE_SSL:
-    SECURE_SSL_REDIRECT = not DEBUG
+    SECURE_SSL_REDIRECT = False
 
 DEFAULT_FROM_EMAIL: str = os.environ.get(
     "DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "noreply@example.com"
