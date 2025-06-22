@@ -119,10 +119,10 @@ DATABASES = {
     ),
     # TODO: We need to add read only user to saleor platfrom, and we need to update
     # docs.
-    # DATABASE_CONNECTION_REPLICA_NAME: dj_database_url.config(
-    #     default="postgres://saleor_read_only:saleor@localhost:5432/saleor",
-    #     conn_max_age=600,
-    # ),
+    DATABASE_CONNECTION_REPLICA_NAME: dj_database_url.config(
+        default="postgres://saleor_read_only:saleor@localhost:5432/saleor",
+        conn_max_age=600,
+    ),
 }
 # To allow connection pooling to work
 DATABASES['default']['DISABLE_SERVER_SIDE_CURSORS'] = True
