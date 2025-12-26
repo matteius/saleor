@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "saleor"
 version = "3.22.5"
 description = "A modular, high performance, headless e-commerce platform built with Python, GraphQL, Django, and React."
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.12,<3.14"
 readme = "README.md"
 license = "BSD-3-Clause"
 dependencies = [
