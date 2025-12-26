@@ -143,6 +143,8 @@ DATABASES = {
         test_options={"MIRROR": DATABASE_CONNECTION_DEFAULT_NAME},
     ),
 }
+# To allow connection pooling to work
+DATABASES['default']['DISABLE_SERVER_SIDE_CURSORS'] = True
 
 DATABASE_ROUTERS = ["saleor.core.db_routers.PrimaryReplicaRouter"]
 

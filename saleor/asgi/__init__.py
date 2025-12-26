@@ -13,7 +13,6 @@ from ..core.telemetry import initialize_telemetry
 from .asgi_handler import get_asgi_application
 from .cors_handler import cors_handler
 from .gzip_compression import gzip_compression
-from .health_check import health_check
 from .telemetry import telemetry_middleware
 
 
@@ -34,7 +33,6 @@ def preload_app() -> None:
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "saleor.settings")
 
 application = get_asgi_application()
-application = health_check(application, "/health/")
 application = gzip_compression(application)
 application = cors_handler(application)
 application = telemetry_middleware(application)
