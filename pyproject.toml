@@ -68,6 +68,7 @@ dependencies = [
   "semantic-version>=2.10.0,<3",
   "sendgrid>=6.7.1,<7",
   "sentry-sdk~=2.12",
+  "setuptools>=65.0.0",
   "stripe>=3.0.0,<4",
   "text-unidecode~=1.2",
   "urllib3>=2.4.0,<3",
