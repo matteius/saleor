@@ -143,8 +143,23 @@ DATABASES = {
         test_options={"MIRROR": DATABASE_CONNECTION_DEFAULT_NAME},
     ),
 }
-# To allow connection pooling to work
+# To allow connection pooling (PgBouncer) to work with psycopg3
+# DISABLE_SERVER_SIDE_CURSORS prevents Django from using named/server-side cursors
+# which are incompatible with PgBouncer's transaction pooling mode
 DATABASES['default']['DISABLE_SERVER_SIDE_CURSORS'] = True
+DATABASES['replica']['DISABLE_SERVER_SIDE_CURSORS'] = True
+
+# For psycopg3 with PgBouncer, we need to disable prepared statements
+# by setting prepare_threshold=0 in the connection options
+if 'OPTIONS' not in DATABASES['default']:
+    DATABASES['default']['OPTIONS'] = {}
+if 'OPTIONS' not in DATABASES['replica']:
+    DATABASES['replica']['OPTIONS'] = {}
+
+# Disable prepared statements for PgBouncer compatibility with psycopg3
+# prepare_threshold=0 tells psycopg3 to never use server-side prepared statements
+DATABASES['default']['OPTIONS']['prepare_threshold'] = 0
+DATABASES['replica']['OPTIONS']['prepare_threshold'] = 0
 
 DATABASE_ROUTERS = ["saleor.core.db_routers.PrimaryReplicaRouter"]
 
