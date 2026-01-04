@@ -1,14 +1,6 @@
 import logging
 import os
 
-# Set Django settings module before any Django imports
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "saleor.settings")
-
-# Ensure Django is fully loaded before Celery initializes (required for Celery 5.5+)
-import django
-
-django.setup()
-
 from celery import Celery
 from celery.signals import setup_logging, worker_process_init
 from django.conf import settings
@@ -33,6 +25,9 @@ def setup_celery_logging(loglevel=None, **kwargs):
 @worker_process_init.connect(weak=False)
 def init_celery_telemetry(*args, **kwargs):
     initialize_telemetry()
+
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "saleor.settings")
 
 app = Celery("saleor", task_cls="saleor.core.tasks:RestrictWriterDBTask")
 
