@@ -184,6 +184,13 @@ logger = logging.getLogger(__name__)
 
 
 def get_order_discount_event(discount_obj: dict):
+    # Value type is required in OrderDiscount class.
+    # Such event, without `value_type` filled, could have been created when the code was buggy.
+    # Such events cannot be repaired, this logic only guards code from crashing.
+    value_type = discount_obj.get("value_type")
+    if not value_type:
+        return None
+
     currency = discount_obj["currency"]
 
     amount = prices.Money(Decimal(discount_obj["amount_value"]), currency)
@@ -196,7 +203,7 @@ def get_order_discount_event(discount_obj: dict):
     return OrderEventDiscountObject(
         value=discount_obj.get("value"),
         amount=amount,
-        value_type=discount_obj.get("value_type"),
+        value_type=value_type,
         reason=discount_obj.get("reason"),
         old_value_type=discount_obj.get("old_value_type"),
         old_value=discount_obj.get("old_value"),
@@ -2047,10 +2054,14 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
                 user, address = data
 
             requester = get_user_or_app_from_context(info.context)
-            if order.use_old_id is False or is_owner_or_has_one_of_perms(
+
+            if order.use_old_id is False:
+                return address
+            if user and is_owner_or_has_one_of_perms(
                 requester, user, OrderPermissions.MANAGE_ORDERS
             ):
                 return address
+
             return obfuscate_address(address)
 
         if not order.billing_address_id:
@@ -2078,7 +2089,9 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
             else:
                 user, address = data
             requester = get_user_or_app_from_context(info.context)
-            if order.use_old_id is False or is_owner_or_has_one_of_perms(
+            if order.use_old_id is False:
+                return address
+            if user and is_owner_or_has_one_of_perms(
                 requester, user, OrderPermissions.MANAGE_ORDERS
             ):
                 return address
@@ -2530,10 +2543,13 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
             elif user:
                 email_to_return = user.email
 
-            if order.use_old_id is False or is_owner_or_has_one_of_perms(
+            if order.use_old_id is False:
+                return email_to_return
+            if user and is_owner_or_has_one_of_perms(
                 requester, user, OrderPermissions.MANAGE_ORDERS
             ):
                 return email_to_return
+
             return obfuscate_email(email_to_return)
 
         if not order.user_id:
@@ -2714,11 +2730,14 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
     def resolve_invoices(root: SyncWebhookControlContext[models.Order], info):
         order = root.node
         requester = get_user_or_app_from_context(info.context)
-        if order.use_old_id is True:
+        if order.use_old_id is False:
+            return InvoicesByOrderIdLoader(info.context).load(order.id)
+        if order.user_id:
             check_is_owner_or_has_one_of_perms(
                 requester, order.user, OrderPermissions.MANAGE_ORDERS
             )
-        return InvoicesByOrderIdLoader(info.context).load(order.id)
+            return InvoicesByOrderIdLoader(info.context).load(order.id)
+        return []
 
     @staticmethod
     def resolve_is_shipping_required(

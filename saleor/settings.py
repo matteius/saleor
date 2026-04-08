@@ -1,5 +1,6 @@
 import datetime
 import importlib.metadata
+import json
 import logging
 import os
 import os.path
@@ -28,6 +29,7 @@ from sentry_sdk.scrubber import DEFAULT_DENYLIST, DEFAULT_PII_DENYLIST, EventScr
 
 from . import PatchedSubscriberExecutionContext, __version__
 from .account.i18n_rules_override import i18n_rules_override
+from .core.cleaners.html import HtmlCleanerSettings
 from .core.db.patch import patch_db
 from .core.languages import LANGUAGES as CORE_LANGUAGES
 from .core.rlimit import validate_and_set_rlimit
@@ -504,13 +506,7 @@ DEFAULT_MAX_EMAIL_DISPLAY_NAME_LENGTH = 78
 
 COUNTRIES_OVERRIDE = {
     "EU": "European Union",
-    "XK": {
-        "name": "Kosovo",
-        "alpha3": "XXK",
-        "ioc_code": "KOS",
-        "numeric": "383",
-        "numeric_padded": "0383",
-    },
+    "XK": "Kosovo",
 }
 
 MAX_USER_ADDRESSES = int(os.environ.get("MAX_USER_ADDRESSES", 100))
@@ -874,6 +870,11 @@ def SENTRY_INIT(dsn: str, sentry_opts: dict):
 
 GRAPHQL_PAGINATION_LIMIT = 100
 GRAPHQL_MIDDLEWARE: list[str] = []
+GRAPHQL_ALIAS_COUNT_LIMIT: int = int(os.environ.get("GRAPHQL_ALIAS_COUNT_LIMIT", 100))
+GRAPHQL_MUTATION_COUNT_LIMIT: int = int(
+    os.environ.get("GRAPHQL_MUTATION_COUNT_LIMIT", 3)
+)
+GRAPHQL_BATCH_MAX_COUNT: int = int(os.environ.get("GRAPHQL_BATCH_MAX_COUNT", 1))
 
 # Set GRAPHQL_QUERY_MAX_COMPLEXITY=0 in env to disable (not recommended)
 GRAPHQL_QUERY_MAX_COMPLEXITY = int(
@@ -1040,6 +1041,11 @@ AUTOMATIC_CHECKOUT_COMPLETION_QUEUE_NAME = os.environ.get(
     "AUTOMATIC_CHECKOUT_COMPLETION_QUEUE_NAME", None
 )
 
+# Queue name for Celery data migration tasks
+DATA_MIGRATIONS_TASKS_QUEUE_NAME = os.environ.get(
+    "DATA_MIGRATIONS_TASKS_QUEUE_NAME", None
+)
+
 # Lock time for request password reset mutation per user (seconds)
 RESET_PASSWORD_LOCK_TIME = parse(
     os.environ.get("RESET_PASSWORD_LOCK_TIME", "15 minutes")
@@ -1143,6 +1149,57 @@ TELEMETRY_SLOW_GRAPHQL_OPERATION_THRESHOLD = float(
 # Additional hash suffix, allowing to invalidate cached schema. In production usually we want this to be empty.
 # For development envs, where schema may change often, it may be convenient to set it to e.g. commit hash value.
 GRAPHQL_CACHE_SUFFIX = os.environ.get("GRAPHQL_CACHE_SUFFIX", "")
+
+# Maximum depth for EditorJS nested lists. This value shouldn't be set too high to
+# prevent abuses. It's not recommended to increase it further than 10, if strictly
+# necessary (not recommended), it could be increase up to 100.
+#
+# HINT: in the frontend configuration, set `maxLevel` to the same value to improve
+#       user-experience on the client-side (https://github.com/editor-js/list/blob/f8cde313224499ed5bcf3e93864fc11c45fe7efb/README.md#config-params)
+EDITOR_JS_LISTS_MAX_DEPTH: int = int(os.environ.get("EDITOR_JS_LISTS_MAX_DEPTH", 10))
+
+HTML_CLEANER_PREFS: HtmlCleanerSettings = HtmlCleanerSettings.parse()
+
+# File upload settings
+# Allowed mime types for file uploads (safe, non-executable formats)
+# Dict structure: {<mime-type>: [<extensions>]}
+ALLOWED_MIME_TYPES = {
+    "image/avif": [".avif"],
+    "image/bmp": [".bmp"],
+    "image/gif": [".gif"],
+    "image/jpeg": [".jpg", ".jpeg", ".jpe", ".jfif"],
+    "image/png": [".png"],
+    "image/tiff": [".tiff", ".tif"],
+    "image/webp": [".webp"],
+    # Documents
+    "application/msword": [".doc"],
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [
+        ".docx"
+    ],
+    "application/vnd.ms-excel": [".xls"],
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
+    "application/vnd.ms-powerpoint": [".ppt"],
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": [
+        ".pptx"
+    ],
+    # Videos
+    "video/mp4": [".mp4"],
+    "video/webm": [".webm"],
+    "video/ogg": [".ogv", ".ogg"],
+    "video/quicktime": [".mov"],
+    # Audio
+    "audio/mpeg": [".mp3", ".mpeg"],
+    "audio/mp4": [".m4a"],
+    "audio/webm": [".weba"],
+    "audio/ogg": [".oga", ".ogg"],
+    "audio/wav": [".wav"],
+    # Text (plain only)
+    "text/plain": [".txt"],
+    "text/csv": [".csv"],
+}
+ALLOWED_MIME_TYPES.update(
+    json.loads(os.environ.get("UPLOAD_ADDITIONAL_ALLOWED_MIME_TYPES", "{}"))
+)
 
 # Library `google-i18n-address` use `AddressValidationMetadata` form Google to provide address validation rules.
 # Patch `i18n` module to allows to override the default address rules.

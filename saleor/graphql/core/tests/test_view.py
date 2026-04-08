@@ -17,7 +17,9 @@ from ...tests.utils import get_graphql_content, get_graphql_content_from_respons
 from ...views import GraphQLView, generate_cache_key
 
 
-def test_batch_queries(category, product, api_client, channel_USD):
+def test_batch_queries(category, product, api_client, channel_USD, settings):
+    settings.GRAPHQL_BATCH_MAX_COUNT = 2
+
     query_product = """
         query GetProduct($id: ID!, $channel: String) {
             product(id: $id, channel: $channel) {
@@ -63,6 +65,41 @@ def test_batch_queries(category, product, api_client, channel_USD):
     assert data["category"]["name"] == category.name
 
 
+def test_rejects_based_on_number_batch_queries(api_client, settings):
+    """Verifies the behavior when sending multiple batch queries."""
+
+    # By default, we expect Saleor to disallow batch queries
+    assert settings.GRAPHQL_BATCH_MAX_COUNT == 1
+
+    query = {"query": "{__typename}"}
+    queries = [query]
+
+    # When sending a batch with only 1 query, it should allow it
+    resp = api_client.post(data=queries)
+    resp_data = resp.json()
+    assert isinstance(resp_data, list)
+    assert len(resp_data) == 1
+    resp_data[0].pop("extensions")
+    assert resp_data[0] == {"data": {"__typename": "Query"}}
+
+    # When sending more than 1 query, it should reject
+    queries.append(query)
+    resp = api_client.post(data=queries)
+    assert resp.json() == {
+        "errors": [
+            {
+                "extensions": {
+                    "exception": {
+                        "code": "GraphQLError",
+                    },
+                },
+                "message": "Number of batch queries exceeded.",
+            },
+        ]
+    }
+    assert resp.status_code == 400
+
+
 def test_graphql_view_query_with_invalid_object_type(
     staff_api_client, product, permission_manage_orders, graphql_log_handler
 ):
@@ -96,12 +133,17 @@ def test_graphql_view_not_allowed(method, client):
     assert response.status_code == 405
 
 
+@override_settings(DEBUG=False)
 def test_invalid_request_body_non_debug(client):
     data = "invalid-data"
     response = client.post(API_PATH, data, content_type="application/json")
     assert response.status_code == 400
     content = get_graphql_content_from_response(response)
-    assert "errors" in content
+    errors = content.get("errors")
+    assert len(errors) == 1
+    assert errors[0]["message"] == "Unable to parse query."
+    assert errors[0]["extensions"]["exception"]["code"] == "GraphQLError"
+    assert "stacktrace" not in errors[0]["extensions"]["exception"]
 
 
 @override_settings(DEBUG=True)
@@ -111,12 +153,47 @@ def test_invalid_request_body_with_debug(client):
     assert response.status_code == 400
     content = get_graphql_content_from_response(response)
     errors = content.get("errors")
-    assert errors == [
-        {
-            "extensions": {"exception": {"code": "str", "stacktrace": []}},
-            "message": "Unable to parse query.",
-        }
-    ]
+    assert len(errors) == 1
+    assert errors[0]["message"] == "Unable to parse query."
+    assert errors[0]["extensions"]["exception"]["code"] == "GraphQLError"
+    assert "stacktrace" in errors[0]["extensions"]["exception"]
+
+
+@pytest.mark.parametrize("debug", [True, False])
+def test_invalid_request_body_error_is_not_logged(client, caplog, settings, debug):
+    # given
+    settings.DEBUG = debug
+    data = "invalid-data"
+
+    # when
+    with caplog.at_level(logging.ERROR, logger="saleor.graphql.errors.unhandled"):
+        client.post(API_PATH, data, content_type="application/json")
+
+    # then
+    assert caplog.records == []
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        '""',
+        "123",
+        "1.5",
+        "true",
+        "false",
+        "null",
+    ],
+)
+def test_unexpected_types_in_json_request_body(client, data):
+    # when
+    response = client.post(API_PATH, data, content_type="application/json")
+
+    # then
+    content = get_graphql_content_from_response(response)
+    assert response.status_code == 400
+    errors = content.get("errors")
+    assert len(errors) == 1
+    assert errors[0]["message"] == "Unable to parse query."
 
 
 def test_invalid_query(api_client):
