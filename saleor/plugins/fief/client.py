@@ -54,10 +54,13 @@ from ...core.http_client import HTTPConfig
 # Endpoint paths (relative to ``apps_fief_base_url``)
 # ---------------------------------------------------------------------------
 
-PATH_AUTH_URL = "/api/plugin/external-authentication-url"
-PATH_OBTAIN_TOKENS = "/api/plugin/external-obtain-access-tokens"
-PATH_REFRESH = "/api/plugin/external-refresh"
-PATH_LOGOUT = "/api/plugin/external-logout"
+# NOTE: these paths must stay in lock-step with the apps/fief route
+# definitions (T18-T21). The HMAC sign string includes the URL pathname,
+# so any drift here makes every signed call fail closed against T58.
+PATH_AUTH_URL = "/api/auth/external-authentication-url"
+PATH_OBTAIN_TOKENS = "/api/auth/external-obtain-access-tokens"
+PATH_REFRESH = "/api/auth/external-refresh"
+PATH_LOGOUT = "/api/auth/external-logout"
 
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 10
 
