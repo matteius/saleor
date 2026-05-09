@@ -36,24 +36,28 @@ from ..client import (
 # JSON, small body, fixed timestamp, deterministic.
 BYTE_LOCK_FIXTURE = {
     "method": "POST",
-    "path": "/api/plugin/external-authentication-url",
+    "path": "/api/auth/external-authentication-url",
     "timestamp": "1715212800",  # 2024-05-08T22:40:00Z, fixed for the test
     "body": b'{"saleorApiUrl":"https://shop.example.com/graphql/","channelSlug":"default","input":{"redirectUri":"https://shop.example.com/callback"}}',
     "secret": "test-shared-secret-do-not-use-in-prod",
 }
 # Pre-computed expected outputs. These values are the byte-lock; T58's Node
 # verifier MUST produce identical bytes for the same inputs.
+# NOTE: the path was migrated from /api/plugin/... to /api/auth/... in T57
+# to match where T18-T21 actually shipped on the apps/fief side. The body
+# SHA-256 is unchanged (body bytes are identical) but the sign string and
+# signature both change because the sign string includes the pathname.
 BYTE_LOCK_EXPECTED_BODY_SHA256 = (
     "dd8754f44b86a477b4e901628c64fbdab83db3da10462b5d6ccb50e1849248cf"
 )
 BYTE_LOCK_EXPECTED_SIGN_STRING = (
     "POST\n"
-    "/api/plugin/external-authentication-url\n"
+    "/api/auth/external-authentication-url\n"
     "1715212800\n"
     "dd8754f44b86a477b4e901628c64fbdab83db3da10462b5d6ccb50e1849248cf"
 )
 BYTE_LOCK_EXPECTED_SIGNATURE = (
-    "b6d9f71b30f0ba32d7db1f8a800102e20f52cca25358f9d5d34a92b63286c4bb"
+    "a3904cd36e8eb1d2ccc167d10e88d520980fdb30d4dd0a89e311e969127e30e8"
 )
 
 
@@ -230,7 +234,7 @@ def test_authentication_url_request_shape(client):
     call = session.request.call_args
     assert call.kwargs["method"] == "POST"
     assert call.kwargs["url"].endswith(
-        "/api/plugin/external-authentication-url"
+        "/api/auth/external-authentication-url"
     )
     headers = call.kwargs["headers"]
     assert "X-Fief-Plugin-Timestamp" in headers
@@ -279,7 +283,7 @@ def test_obtain_access_tokens_request_shape(client):
     assert result.claims["email"] == "user@example.com"
     call = session.request.call_args
     assert call.kwargs["url"].endswith(
-        "/api/plugin/external-obtain-access-tokens"
+        "/api/auth/external-obtain-access-tokens"
     )
     body = json.loads(call.kwargs["data"])
     assert body["code"] == "auth-code"
@@ -317,7 +321,7 @@ def test_refresh_request_shape(client):
     assert result.fief_access_token == "new-access"
     assert result.logout_required is False
     call = session.request.call_args
-    assert call.kwargs["url"].endswith("/api/plugin/external-refresh")
+    assert call.kwargs["url"].endswith("/api/auth/external-refresh")
     body = json.loads(call.kwargs["data"])
     assert body["refreshToken"] == "old-refresh"
 
@@ -338,7 +342,7 @@ def test_logout_request_shape(client):
     assert isinstance(result, LogoutResponse)
     assert result.ok is True
     call = session.request.call_args
-    assert call.kwargs["url"].endswith("/api/plugin/external-logout")
+    assert call.kwargs["url"].endswith("/api/auth/external-logout")
     body = json.loads(call.kwargs["data"])
     assert body["refreshToken"] == "old-refresh"
 
