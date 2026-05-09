@@ -968,6 +968,7 @@ BUILTIN_PLUGINS = [
     "saleor.plugins.admin_email.plugin.AdminEmailPlugin",
     "saleor.plugins.sendgrid.plugin.DeprecatedSendgridEmailPlugin",
     "saleor.plugins.openid_connect.plugin.OpenIDConnectPlugin",
+    "saleor.plugins.fief.plugin.FiefPlugin",
 ]
 
 # Plugin discovery
