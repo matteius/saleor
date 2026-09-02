@@ -49,8 +49,13 @@ def private_media_setting(private_media_root, settings):
 
 
 # The fixtures below shadow saleor-wide autouse fixtures that touch the DB
-# (default_tax_class, site_settings). Returning ``None`` is fine — the T56
-# scaffold tests only care about pure-Python behavior.
+# (default_customer_type, default_tax_class, site_settings). Returning ``None``
+# is fine — the Fief tests only care about pure-Python behavior.
+
+
+@pytest.fixture(autouse=True)
+def default_customer_type():  # noqa: PT004
+    return None
 
 
 @pytest.fixture(autouse=True)
