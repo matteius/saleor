@@ -35,11 +35,13 @@ from ...product.types import ProductVariant
 from ...site.dataloaders import get_site_promise
 from ..types import Checkout
 from .utils import (
+    PRICE_OVERRIDE_REASON_INPUT_DESCRIPTION,
     apply_gift_reward_if_applicable_on_checkout_creation,
     check_lines_quantity,
     check_permissions_for_custom_prices,
     get_variants_and_total_quantities,
     group_lines_input_on_add,
+    validate_price_override_reason,
     validate_variants_are_published,
     validate_variants_available_for_purchase,
 )
@@ -109,6 +111,10 @@ class CheckoutLineInput(BaseInputObjectType):
             "with `HANDLE_CHECKOUTS` permission. When the line with the same variant "
             "will be provided multiple times, the last price will be used."
         ),
+    )
+    price_override_reason = graphene.String(
+        required=False,
+        description=PRICE_OVERRIDE_REASON_INPUT_DESCRIPTION,
     )
     force_new_line = graphene.Boolean(
         required=False,
@@ -266,6 +272,7 @@ class CheckoutCreate(DeprecatedModelMutation, I18nMixin):
         )
 
         checkout_lines_data = group_lines_input_on_add(lines)
+        validate_price_override_reason(checkout_lines_data)
 
         variant_db_ids = {variant.id for variant in variants}
         validate_variants_available_for_purchase(variant_db_ids, channel.id)
@@ -280,6 +287,9 @@ class CheckoutCreate(DeprecatedModelMutation, I18nMixin):
             variants, checkout_lines_data
         )
 
+        use_legacy_shipping_zone_stock_availability = (
+            site.settings.use_legacy_shipping_zone_stock_availability
+        )
         check_lines_quantity(
             variants,
             quantities,
@@ -287,6 +297,7 @@ class CheckoutCreate(DeprecatedModelMutation, I18nMixin):
             channel.slug,
             site.settings.limit_quantity_per_checkout,
             check_reservations=is_reservation_enabled(site.settings),
+            calculate_stocks_with_shipping_zones=use_legacy_shipping_zone_stock_availability,
         )
         return variants, checkout_lines_data
 
@@ -494,6 +505,7 @@ class CheckoutCreate(DeprecatedModelMutation, I18nMixin):
                     reservation_length=get_reservation_length(
                         site=site, user=info.context.user
                     ),
+                    calculate_stocks_with_shipping_zones=site.settings.use_legacy_shipping_zone_stock_availability,
                 )
 
             # Save addresses

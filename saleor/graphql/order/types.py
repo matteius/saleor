@@ -1,5 +1,6 @@
 import logging
 from decimal import Decimal
+from typing import cast
 from uuid import UUID
 
 import graphene
@@ -22,18 +23,20 @@ from ...graphql.core.context import (
     get_database_connection_name,
 )
 from ...graphql.core.federation.entities import federated_entity
-from ...graphql.core.federation.resolvers import resolve_federation_references
+from ...graphql.core.federation.resolvers import (
+    resolve_federation_references,
+)
 from ...graphql.order.resolvers import resolve_orders
 from ...graphql.utils import get_user_or_app_from_context
 from ...graphql.warehouse.dataloaders import StockByIdLoader, WarehouseByIdLoader
-from ...order import OrderOrigin, OrderStatus, calculations, models
-from ...order.calculations import fetch_order_prices_if_expired
+from ...order import OrderOrigin, OrderStatus, models
+from ...order.delivery_context import (
+    get_external_shipping_id,
+    get_valid_collection_points_for_order,
+)
 from ...order.models import FulfillmentStatus
 from ...order.utils import (
-    get_external_shipping_id,
     get_order_country,
-    get_valid_collection_points_for_order,
-    get_valid_shipping_methods_for_order,
 )
 from ...payment import ChargeStatus, TransactionKind
 from ...payment.dataloaders import PaymentsByOrderIdLoader
@@ -77,7 +80,9 @@ from ..core.descriptions import (
     ADDED_IN_320,
     ADDED_IN_321,
     ADDED_IN_322,
+    ADDED_IN_323,
     DEPRECATED_IN_3X_INPUT,
+    DEPRECATED_LEGACY_PAYMENTS,
     PREVIEW_FEATURE,
 )
 from ..core.doc_category import DOC_CATEGORY_ORDERS
@@ -125,10 +130,7 @@ from ..payment.types import (
     PaymentChargeStatusEnum,
     TransactionEvent,
     TransactionItem,
-)
-from ..plugins.dataloaders import (
-    get_plugin_manager_promise,
-    plugin_manager_promise_callback,
+    TransactionSummary,
 )
 from ..product.dataloaders import (
     ImagesByProductIdLoader,
@@ -138,13 +140,13 @@ from ..product.dataloaders import (
     ProductVariantByIdLoader,
     ThumbnailByProductMediaIdSizeAndFormatLoader,
 )
-from ..product.types import DigitalContentUrl, ProductVariant
+from ..product.types import ProductVariant
 from ..shipping.dataloaders import (
     ShippingMethodByIdLoader,
-    ShippingMethodChannelListingByChannelSlugLoader,
     ShippingMethodChannelListingByShippingMethodIdAndChannelSlugLoader,
 )
 from ..shipping.types import ShippingMethod
+from ..site.dataloaders import load_site_callback
 from ..tax.dataloaders import (
     TaxClassByIdLoader,
     TaxConfigurationByChannelId,
@@ -154,6 +156,7 @@ from ..tax.types import TaxClass
 from ..warehouse.types import Allocation, Stock, Warehouse
 from .dataloaders import (
     AllocationsByOrderLineIdLoader,
+    FulfillmentByIdLoader,
     FulfillmentLinesByFulfillmentIdLoader,
     FulfillmentLinesByIdLoader,
     FulfillmentsByOrderIdLoader,
@@ -161,10 +164,14 @@ from .dataloaders import (
     OrderByNumberLoader,
     OrderEventsByIdLoader,
     OrderEventsByOrderIdLoader,
+    OrderGrantedRefundByIdLoader,
     OrderGrantedRefundLinesByOrderGrantedRefundIdLoader,
     OrderGrantedRefundsByOrderIdLoader,
     OrderLineByIdLoader,
     OrderLinesByOrderIdLoader,
+    OrderPriceCalculationByOrderIdAndWebhookSyncLoader,
+    OrderPromotionCalculateByOrderIdLoaderAndWebhookSyncLoader,
+    OrderShippingMethodsByOrderIdAndWebhookSyncLoader,
     TransactionEventsByOrderGrantedRefundIdLoader,
     TransactionItemsByOrderIDLoader,
 )
@@ -184,6 +191,13 @@ logger = logging.getLogger(__name__)
 
 
 def get_order_discount_event(discount_obj: dict):
+    # Value type is required in OrderDiscount class.
+    # Such event, without `value_type` filled, could have been created when the code was buggy.
+    # Such events cannot be repaired, this logic only guards code from crashing.
+    value_type = discount_obj.get("value_type")
+    if not value_type:
+        return None
+
     currency = discount_obj["currency"]
 
     amount = prices.Money(Decimal(discount_obj["amount_value"]), currency)
@@ -196,7 +210,7 @@ def get_order_discount_event(discount_obj: dict):
     return OrderEventDiscountObject(
         value=discount_obj.get("value"),
         amount=amount,
-        value_type=discount_obj.get("value_type"),
+        value_type=value_type,
         reason=discount_obj.get("reason"),
         old_value_type=discount_obj.get("old_value_type"),
         old_value=discount_obj.get("old_value"),
@@ -241,6 +255,12 @@ class OrderGrantedRefundLine(
         required=True,
     )
     reason = graphene.String(description="Reason for refunding the line.")
+    reason_reference = graphene.Field(
+        Page,
+        required=False,
+        description="Reason Model (Page) reference for this refund line."
+        + ADDED_IN_323,
+    )
 
     class Meta:
         default_resolver = (
@@ -262,6 +282,40 @@ class OrderGrantedRefundLine(
             OrderLineByIdLoader(info.context)
             .load(root.node.order_line_id)
             .then(_wrap_with_sync_webhook_control_context)
+        )
+
+    @staticmethod
+    def resolve_reason_reference(
+        root: SyncWebhookControlContext[models.OrderGrantedRefundLine], info
+    ):
+        if not root.node.reason_reference_id:
+            return None
+
+        def wrap_page_with_context(page):
+            if not page:
+                return None
+
+            def _wrap_with_channel(granted_refund):
+                return (
+                    ChannelByOrderIdLoader(info.context)
+                    .load(granted_refund.order_id)
+                    .then(
+                        lambda channel: ChannelContext(
+                            node=page, channel_slug=channel.slug
+                        )
+                    )
+                )
+
+            return (
+                OrderGrantedRefundByIdLoader(info.context)
+                .load(root.node.granted_refund_id)
+                .then(_wrap_with_channel)
+            )
+
+        return (
+            PageByIdLoader(info.context)
+            .load(root.node.reason_reference_id)
+            .then(wrap_page_with_context)
         )
 
 
@@ -401,7 +455,7 @@ class OrderGrantedRefund(
     def resolve_reason_reference(
         root: SyncWebhookControlContext[models.OrderGrantedRefund], info
     ):
-        if not root.node.reason_reference:
+        if not root.node.reason_reference_id:
             return None
 
         def wrap_page_with_context(page):
@@ -812,6 +866,15 @@ class FulfillmentLine(
         lambda: OrderLine,
         description="The order line to which the fulfillment line is related.",
     )
+    reason = graphene.String(
+        description="Reason for returning this fulfillment line." + ADDED_IN_323,
+    )
+    reason_reference = graphene.Field(
+        Page,
+        required=False,
+        description="Reason Model (Page) reference for this fulfillment line."
+        + ADDED_IN_323,
+    )
 
     class Meta:
         default_resolver = (
@@ -834,6 +897,37 @@ class FulfillmentLine(
             OrderLineByIdLoader(info.context)
             .load(root.node.order_line_id)
             .then(_wrap_with_sync_webhook_control_context)
+        )
+
+    @staticmethod
+    def resolve_reason_reference(
+        root: SyncWebhookControlContext[models.FulfillmentLine], info
+    ):
+        if not root.node.reason_reference_id:
+            return None
+
+        def wrap_page_with_context(page):
+            if not page:
+                return None
+
+            return (
+                FulfillmentByIdLoader(info.context)
+                .load(root.node.fulfillment_id)
+                .then(
+                    lambda fulfillment: ChannelByOrderIdLoader(info.context)
+                    .load(fulfillment.order_id)
+                    .then(
+                        lambda channel: ChannelContext(
+                            node=page, channel_slug=channel.slug
+                        )
+                    )
+                )
+            )
+
+        return (
+            PageByIdLoader(info.context)
+            .load(root.node.reason_reference_id)
+            .then(wrap_page_with_context)
         )
 
 
@@ -870,6 +964,15 @@ class Fulfillment(
         Money,
         description="Total refunded amount assigned to this fulfillment.",
         required=False,
+    )
+    reason = graphene.String(
+        description="Reason for returning this fulfillment." + ADDED_IN_323,
+    )
+    reason_reference = graphene.Field(
+        Page,
+        required=False,
+        description="Reason Model (Page) reference for this fulfillment."
+        + ADDED_IN_323,
     )
 
     class Meta:
@@ -969,6 +1072,31 @@ class Fulfillment(
             .then(_resolve_total_refund_amount)
         )
 
+    @staticmethod
+    def resolve_reason_reference(
+        root: SyncWebhookControlContext[models.Fulfillment], info
+    ):
+        if not root.node.reason_reference_id:
+            return None
+
+        def wrap_page_with_context(page):
+            if not page:
+                return None
+
+            return (
+                ChannelByOrderIdLoader(info.context)
+                .load(root.node.order_id)
+                .then(
+                    lambda channel: ChannelContext(node=page, channel_slug=channel.slug)
+                )
+            )
+
+        return (
+            PageByIdLoader(info.context)
+            .load(root.node.reason_reference_id)
+            .then(wrap_page_with_context)
+        )
+
 
 class OrderLine(
     SyncWebhookControlContextModelObjectType[ModelObjectType[models.OrderLine]]
@@ -994,7 +1122,6 @@ class OrderLine(
     tax_rate = graphene.Float(
         required=True, description="Rate of tax applied on product variant."
     )
-    digital_content_url = graphene.Field(DigitalContentUrl)
     thumbnail = ThumbnailField()
     unit_price = graphene.Field(
         TaxedMoney,
@@ -1057,6 +1184,15 @@ class OrderLine(
     )
     is_price_overridden = graphene.Boolean(
         description="Returns True, if the line unit price was overridden."
+    )
+    price_override_reason = PermissionsField(
+        graphene.String,
+        description=(
+            "Reason explaining why a custom price was set on the line, copied from "
+            "the checkout line when the order was created from a checkout."
+            + ADDED_IN_323
+        ),
+        permissions=[OrderPermissions.MANAGE_ORDERS],
     )
     variant = graphene.Field(
         ProductVariant,
@@ -1205,23 +1341,18 @@ class OrderLine(
     def resolve_unit_price(root: SyncWebhookControlContext[models.OrderLine], info):
         order_line = root.node
 
-        @allow_writer_in_context(info.context)
-        def _resolve_unit_price(data):
-            order, lines, manager = data
-            database_connection_name = get_database_connection_name(info.context)
-            return calculations.order_line_unit(
-                order,
-                order_line,
-                manager,
-                lines,
-                database_connection_name=database_connection_name,
-                allow_sync_webhooks=root.allow_sync_webhooks,
-            ).price_with_discounts
+        def _get_unit_price(data):
+            order, lines = data
+            line = next(
+                (line for line in lines if line.pk == order_line.pk), order_line
+            )
+            return quantize_price(line.unit_price, order.currency)
 
-        order = OrderByIdLoader(info.context).load(order_line.order_id)
-        lines = OrderLinesByOrderIdLoader(info.context).load(order_line.order_id)
-        manager = get_plugin_manager_promise(info.context)
-        return Promise.all([order, lines, manager]).then(_resolve_unit_price)
+        return (
+            OrderPriceCalculationByOrderIdAndWebhookSyncLoader(info.context)
+            .load((order_line.order_id, root.allow_sync_webhooks))
+            .then(_get_unit_price)
+        )
 
     @staticmethod
     def resolve_quantity_to_fulfill(
@@ -1237,24 +1368,17 @@ class OrderLine(
     ):
         order_line = root.node
 
-        @allow_writer_in_context(info.context)
-        def _resolve_undiscounted_unit_price(data):
-            order, lines, manager = data
-            database_connection_name = get_database_connection_name(info.context)
-            return calculations.order_line_unit(
-                order,
-                order_line,
-                manager,
-                lines,
-                database_connection_name=database_connection_name,
-                allow_sync_webhooks=root.allow_sync_webhooks,
-            ).undiscounted_price
+        def _get_undiscounted_unit_price(data):
+            order, lines = data
+            line = next(
+                (line for line in lines if line.pk == order_line.pk), order_line
+            )
+            return quantize_price(line.undiscounted_unit_price, order.currency)
 
-        order = OrderByIdLoader(info.context).load(order_line.order_id)
-        lines = OrderLinesByOrderIdLoader(info.context).load(order_line.order_id)
-        manager = get_plugin_manager_promise(info.context)
-        return Promise.all([order, lines, manager]).then(
-            _resolve_undiscounted_unit_price
+        return (
+            OrderPriceCalculationByOrderIdAndWebhookSyncLoader(info.context)
+            .load((order_line.order_id, root.allow_sync_webhooks))
+            .then(_get_undiscounted_unit_price)
         )
 
     @staticmethod
@@ -1263,20 +1387,18 @@ class OrderLine(
     ):
         order_line = root.node
 
-        def _resolve_unit_discount_type(data):
-            order, lines, manager = data
-            return calculations.order_line_unit_discount_type(
-                order,
-                order_line,
-                manager,
-                lines,
-                allow_sync_webhooks=root.allow_sync_webhooks,
+        def _get_unit_discount_type(data):
+            _, lines = data
+            line = next(
+                (line for line in lines if line.pk == order_line.pk), order_line
             )
+            return line.unit_discount_type
 
-        order = OrderByIdLoader(info.context).load(order_line.order_id)
-        lines = OrderLinesByOrderIdLoader(info.context).load(order_line.order_id)
-        manager = get_plugin_manager_promise(info.context)
-        return Promise.all([order, lines, manager]).then(_resolve_unit_discount_type)
+        return (
+            OrderPriceCalculationByOrderIdAndWebhookSyncLoader(info.context)
+            .load((order_line.order_id, root.allow_sync_webhooks))
+            .then(_get_unit_discount_type)
+        )
 
     @staticmethod
     def resolve_unit_discount_value(
@@ -1284,62 +1406,53 @@ class OrderLine(
     ):
         order_line = root.node
 
-        def _resolve_unit_discount_value(data):
-            order, lines, manager = data
-            return calculations.order_line_unit_discount_value(
-                order,
-                order_line,
-                manager,
-                lines,
-                allow_sync_webhooks=root.allow_sync_webhooks,
+        def _get_unit_discount_value(data):
+            _, lines = data
+            line = next(
+                (line for line in lines if line.pk == order_line.pk), order_line
             )
+            return line.unit_discount_value
 
-        order = OrderByIdLoader(info.context).load(order_line.order_id)
-        lines = OrderLinesByOrderIdLoader(info.context).load(order_line.order_id)
-        manager = get_plugin_manager_promise(info.context)
-        return Promise.all([order, lines, manager]).then(_resolve_unit_discount_value)
+        return (
+            OrderPriceCalculationByOrderIdAndWebhookSyncLoader(info.context)
+            .load((order_line.order_id, root.allow_sync_webhooks))
+            .then(_get_unit_discount_value)
+        )
 
     @staticmethod
     def resolve_unit_discount(root: SyncWebhookControlContext[models.OrderLine], info):
         order_line = root.node
 
-        def _resolve_unit_discount(data):
-            order, lines, manager = data
-            return calculations.order_line_unit_discount(
-                order,
-                order_line,
-                manager,
-                lines,
-                allow_sync_webhooks=root.allow_sync_webhooks,
+        def _get_unit_discount(data):
+            order, lines = data
+            line = next(
+                (line for line in lines if line.pk == order_line.pk), order_line
             )
+            return quantize_price(line.unit_discount, order.currency)
 
-        order = OrderByIdLoader(info.context).load(order_line.order_id)
-        lines = OrderLinesByOrderIdLoader(info.context).load(order_line.order_id)
-        manager = get_plugin_manager_promise(info.context)
-        return Promise.all([order, lines, manager]).then(_resolve_unit_discount)
+        return (
+            OrderPriceCalculationByOrderIdAndWebhookSyncLoader(info.context)
+            .load((order_line.order_id, root.allow_sync_webhooks))
+            .then(_get_unit_discount)
+        )
 
     @staticmethod
     @traced_resolver
     def resolve_tax_rate(root: SyncWebhookControlContext[models.OrderLine], info):
         order_line = root.node
 
-        @allow_writer_in_context(info.context)
-        def _resolve_tax_rate(data):
-            order, lines, manager = data
-            database_connection_name = get_database_connection_name(info.context)
-            return calculations.order_line_tax_rate(
-                order,
-                order_line,
-                manager,
-                lines,
-                database_connection_name=database_connection_name,
-                allow_sync_webhooks=root.allow_sync_webhooks,
-            ) or Decimal(0)
+        def _get_tax_rate(data):
+            _, lines = data
+            line = next(
+                (line for line in lines if line.pk == order_line.pk), order_line
+            )
+            return line.tax_rate or Decimal(0)
 
-        order = OrderByIdLoader(info.context).load(order_line.order_id)
-        lines = OrderLinesByOrderIdLoader(info.context).load(order_line.order_id)
-        manager = get_plugin_manager_promise(info.context)
-        return Promise.all([order, lines, manager]).then(_resolve_tax_rate)
+        return (
+            OrderPriceCalculationByOrderIdAndWebhookSyncLoader(info.context)
+            .load((order_line.order_id, root.allow_sync_webhooks))
+            .then(_get_tax_rate)
+        )
 
     @staticmethod
     @traced_resolver
@@ -1347,23 +1460,18 @@ class OrderLine(
     def resolve_total_price(root: SyncWebhookControlContext[models.OrderLine], info):
         order_line = root.node
 
-        @allow_writer_in_context(info.context)
-        def _resolve_total_price(data):
-            order, lines, manager = data
-            database_connection_name = get_database_connection_name(info.context)
-            return calculations.order_line_total(
-                order,
-                order_line,
-                manager,
-                lines,
-                database_connection_name=database_connection_name,
-                allow_sync_webhooks=root.allow_sync_webhooks,
-            ).price_with_discounts
+        def _get_total_price(data):
+            order, lines = data
+            line = next(
+                (line for line in lines if line.pk == order_line.pk), order_line
+            )
+            return quantize_price(line.total_price, order.currency)
 
-        order = OrderByIdLoader(info.context).load(order_line.order_id)
-        lines = OrderLinesByOrderIdLoader(info.context).load(order_line.order_id)
-        manager = get_plugin_manager_promise(info.context)
-        return Promise.all([order, lines, manager]).then(_resolve_total_price)
+        return (
+            OrderPriceCalculationByOrderIdAndWebhookSyncLoader(info.context)
+            .load((order_line.order_id, root.allow_sync_webhooks))
+            .then(_get_total_price)
+        )
 
     @staticmethod
     @traced_resolver
@@ -1373,24 +1481,17 @@ class OrderLine(
     ):
         order_line = root.node
 
-        @allow_writer_in_context(info.context)
-        def _resolve_undiscounted_total_price(data):
-            order, lines, manager = data
-            database_connection_name = get_database_connection_name(info.context)
-            return calculations.order_line_total(
-                order,
-                order_line,
-                manager,
-                lines,
-                database_connection_name=database_connection_name,
-                allow_sync_webhooks=root.allow_sync_webhooks,
-            ).undiscounted_price
+        def _get_undiscounted_total_price(data):
+            order, lines = data
+            line = next(
+                (line for line in lines if line.pk == order_line.pk), order_line
+            )
+            return quantize_price(line.undiscounted_total_price, order.currency)
 
-        order = OrderByIdLoader(info.context).load(order_line.order_id)
-        lines = OrderLinesByOrderIdLoader(info.context).load(order_line.order_id)
-        manager = get_plugin_manager_promise(info.context)
-        return Promise.all([order, lines, manager]).then(
-            _resolve_undiscounted_total_price
+        return (
+            OrderPriceCalculationByOrderIdAndWebhookSyncLoader(info.context)
+            .load((order_line.order_id, root.allow_sync_webhooks))
+            .then(_get_undiscounted_total_price)
         )
 
     @staticmethod
@@ -1468,12 +1569,11 @@ class OrderLine(
     def resolve_discounts(root: SyncWebhookControlContext[models.OrderLine], info):
         line = root.node
 
-        def with_manager_and_order(data):
-            manager, order = data
+        def handle_discounts(data):
+            price_data, line_discounts = data
+            order, _ = price_data
 
-            def handle_line_discount_from_checkout(data):
-                channel, line_discounts = data
-
+            def with_channel(channel):
                 # For legacy propagation, voucher discount was returned as OrderDiscount
                 # when legacy is disabled, return the voucher discount as
                 # OrderLineDiscount. It is a temporary solution to provide a grace
@@ -1492,21 +1592,21 @@ class OrderLine(
 
                 return discounts_to_return
 
-            with allow_writer_in_context(info.context):
-                fetch_order_prices_if_expired(
-                    order, manager, allow_sync_webhooks=root.allow_sync_webhooks
-                )
-            channel_loader = ChannelByIdLoader(info.context).load(order.channel_id)
-            order_line_discounts = OrderLineDiscountsByOrderLineIDLoader(
-                info.context
-            ).load(line.id)
-            return Promise.all([channel_loader, order_line_discounts]).then(
-                handle_line_discount_from_checkout
+            return (
+                ChannelByIdLoader(info.context)
+                .load(order.channel_id)
+                .then(with_channel)
             )
 
-        manager = get_plugin_manager_promise(info.context)
-        order = OrderByIdLoader(info.context).load(line.order_id)
-        return Promise.all([manager, order]).then(with_manager_and_order)
+        price_calculation = OrderPriceCalculationByOrderIdAndWebhookSyncLoader(
+            info.context
+        ).load((line.order_id, root.allow_sync_webhooks))
+        order_line_discounts = OrderLineDiscountsByOrderLineIDLoader(info.context).load(
+            line.id
+        )
+        return Promise.all([price_calculation, order_line_discounts]).then(
+            handle_discounts
+        )
 
 
 @federated_entity("id")
@@ -1636,8 +1736,22 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
         ),
         required=True,
     )
+    transaction_summaries = NonNullList(
+        TransactionSummary,
+        description=(
+            "Payment history of the order, with one entry per payment transaction "
+            "that moved any money. Unlike `transactions`, it requires no permission "
+            "and exposes only the payment method and the amounts, so it can be used "
+            "to display payment details to the customer without exposing internal "
+            "information." + ADDED_IN_323
+        ),
+        required=True,
+    )
     payments = NonNullList(
-        Payment, description="List of payments for the order.", required=True
+        Payment,
+        description="List of payments for the order.",
+        required=True,
+        deprecation_reason=DEPRECATED_LEGACY_PAYMENTS,
     )
     total = graphene.Field(
         TaxedMoney, description="Total amount of the order.", required=True
@@ -1899,22 +2013,24 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
     def resolve_discounts(root: SyncWebhookControlContext[models.Order], info):
         order = root.node
 
-        # Line-lvl voucher discounts are represented as OrderDiscount objects for order
-        # created from checkout.
-        def wrap_line_discounts_from_checkout(data):
-            channel, order_discounts = data
+        def with_recalculated_prices(price_data):
+            order, order_lines = price_data
 
-            if order.origin != OrderOrigin.CHECKOUT:
-                return order_discounts
+            def handle_discounts(data):
+                channel, order_discounts = data
 
-            # voucher discount is stored as OrderLineDiscount object in DB.
-            # for backward compatibility, when legacy propagation is enabled
-            # we convert the order-line-discounts into single OrderDiscount
-            # It is a temporary solution to provide a grace period for migration
-            if not channel.use_legacy_line_discount_propagation_for_order:
-                return order_discounts
+                # Line-lvl voucher discounts are represented as OrderDiscount objects
+                # for order created from checkout.
+                if order.origin != OrderOrigin.CHECKOUT:
+                    return order_discounts
 
-            def wrap_order_line(order_lines):
+                # voucher discount is stored as OrderLineDiscount object in DB.
+                # for backward compatibility, when legacy propagation is enabled
+                # we convert the order-line-discounts into single OrderDiscount
+                # It is a temporary solution to provide a grace period for migration
+                if not channel.use_legacy_line_discount_propagation_for_order:
+                    return order_discounts
+
                 def wrap_order_line_discount(
                     order_line_discounts: list[list[discount_models.OrderLineDiscount]],
                 ):
@@ -1960,59 +2076,68 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
                     .then(wrap_order_line_discount)
                 )
 
-            return (
-                OrderLinesByOrderIdLoader(info.context)
-                .load(order.id)
-                .then(wrap_order_line)
-            )
-
-        def with_manager(manager):
-            with allow_writer_in_context(info.context):
-                fetch_order_prices_if_expired(
-                    order, manager, allow_sync_webhooks=root.allow_sync_webhooks
-                )
             channel_loader = ChannelByIdLoader(info.context).load(order.channel_id)
             order_discounts = OrderDiscountsByOrderIDLoader(info.context).load(order.id)
-            return Promise.all([channel_loader, order_discounts]).then(
-                wrap_line_discounts_from_checkout
-            )
+            return Promise.all([channel_loader, order_discounts]).then(handle_discounts)
 
-        return get_plugin_manager_promise(info.context).then(with_manager)
+        return (
+            OrderPriceCalculationByOrderIdAndWebhookSyncLoader(info.context)
+            .load((order.id, root.allow_sync_webhooks))
+            .then(with_recalculated_prices)
+        )
 
     @staticmethod
     @traced_resolver
     def resolve_discount(root: SyncWebhookControlContext[models.Order], info):
-        def return_voucher_discount(discounts) -> Money | None:
-            if not discounts:
+        order = root.node
+
+        def with_recalculated_promotion(_data):
+            def return_voucher_discount(discounts) -> Money | None:
+                if not discounts:
+                    return None
+                for discount in discounts:
+                    if discount.type == DiscountType.VOUCHER:
+                        return Money(
+                            amount=discount.amount_value, currency=discount.currency
+                        )
                 return None
-            for discount in discounts:
-                if discount.type == DiscountType.VOUCHER:
-                    return Money(
-                        amount=discount.amount_value, currency=discount.currency
-                    )
-            return None
+
+            return (
+                OrderDiscountsByOrderIDLoader(info.context)
+                .load(order.id)
+                .then(return_voucher_discount)
+            )
 
         return (
-            OrderDiscountsByOrderIDLoader(info.context)
-            .load(root.node.id)
-            .then(return_voucher_discount)
+            OrderPromotionCalculateByOrderIdLoaderAndWebhookSyncLoader(info.context)
+            .load((root.node.id, root.allow_sync_webhooks))
+            .then(with_recalculated_promotion)
         )
 
     @staticmethod
     @traced_resolver
     def resolve_discount_name(root: SyncWebhookControlContext[models.Order], info):
-        def return_voucher_name(discounts) -> Money | None:
-            if not discounts:
+        order = root.node
+
+        def with_recalculated_promotion(_data):
+            def return_voucher_name(discounts) -> Money | None:
+                if not discounts:
+                    return None
+                for discount in discounts:
+                    if discount.type == DiscountType.VOUCHER:
+                        return discount.name
                 return None
-            for discount in discounts:
-                if discount.type == DiscountType.VOUCHER:
-                    return discount.name
-            return None
+
+            return (
+                OrderDiscountsByOrderIDLoader(info.context)
+                .load(order.id)
+                .then(return_voucher_name)
+            )
 
         return (
-            OrderDiscountsByOrderIDLoader(info.context)
-            .load(root.node.id)
-            .then(return_voucher_name)
+            OrderPromotionCalculateByOrderIdLoaderAndWebhookSyncLoader(info.context)
+            .load((root.node.id, root.allow_sync_webhooks))
+            .then(with_recalculated_promotion)
         )
 
     @staticmethod
@@ -2020,18 +2145,27 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
     def resolve_translated_discount_name(
         root: SyncWebhookControlContext[models.Order], info
     ):
-        def return_voucher_translated_name(discounts) -> Money | None:
-            if not discounts:
+        order = root.node
+
+        def with_recalculated_promotion(_data):
+            def return_voucher_translated_name(discounts) -> Money | None:
+                if not discounts:
+                    return None
+                for discount in discounts:
+                    if discount.type == DiscountType.VOUCHER:
+                        return discount.translated_name
                 return None
-            for discount in discounts:
-                if discount.type == DiscountType.VOUCHER:
-                    return discount.translated_name
-            return None
+
+            return (
+                OrderDiscountsByOrderIDLoader(info.context)
+                .load(order.id)
+                .then(return_voucher_translated_name)
+            )
 
         return (
-            OrderDiscountsByOrderIDLoader(info.context)
-            .load(root.node.id)
-            .then(return_voucher_translated_name)
+            OrderPromotionCalculateByOrderIdLoaderAndWebhookSyncLoader(info.context)
+            .load((root.node.id, root.allow_sync_webhooks))
+            .then(with_recalculated_promotion)
         )
 
     @staticmethod
@@ -2047,10 +2181,14 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
                 user, address = data
 
             requester = get_user_or_app_from_context(info.context)
-            if order.use_old_id is False or is_owner_or_has_one_of_perms(
+
+            if order.use_old_id is False:
+                return address
+            if user and is_owner_or_has_one_of_perms(
                 requester, user, OrderPermissions.MANAGE_ORDERS
             ):
                 return address
+
             return obfuscate_address(address)
 
         if not order.billing_address_id:
@@ -2078,7 +2216,9 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
             else:
                 user, address = data
             requester = get_user_or_app_from_context(info.context)
-            if order.use_old_id is False or is_owner_or_has_one_of_perms(
+            if order.use_old_id is False:
+                return address
+            if user and is_owner_or_has_one_of_perms(
                 requester, user, OrderPermissions.MANAGE_ORDERS
             ):
                 return address
@@ -2105,20 +2245,17 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
     ):
         order = root.node
 
-        def _resolve_undiscounted_shipping_price(data):
-            lines, manager = data
-            database_connection_name = get_database_connection_name(info.context)
-            return calculations.order_undiscounted_shipping(
-                order,
-                manager,
-                lines,
-                database_connection_name=database_connection_name,
-                allow_sync_webhooks=root.allow_sync_webhooks,
+        def _get_undiscounted_shipping_price(data):
+            order, _ = data
+            return quantize_price(
+                order.undiscounted_base_shipping_price, order.currency
             )
 
-        lines = OrderLinesByOrderIdLoader(info.context).load(order.id)
-        manager = get_plugin_manager_promise(info.context)
-        return Promise.all([lines, manager]).then(_resolve_undiscounted_shipping_price)
+        return (
+            OrderPriceCalculationByOrderIdAndWebhookSyncLoader(info.context)
+            .load((order.id, root.allow_sync_webhooks))
+            .then(_get_undiscounted_shipping_price)
+        )
 
     @staticmethod
     @traced_resolver
@@ -2126,21 +2263,15 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
     def resolve_shipping_price(root: SyncWebhookControlContext[models.Order], info):
         order = root.node
 
-        @allow_writer_in_context(info.context)
-        def _resolve_shipping_price(data):
-            lines, manager = data
-            database_connection_name = get_database_connection_name(info.context)
-            return calculations.order_shipping(
-                order,
-                manager,
-                lines,
-                database_connection_name=database_connection_name,
-                allow_sync_webhooks=root.allow_sync_webhooks,
-            )
+        def get_shipping_price(data):
+            order, _ = data
+            return quantize_price(order.shipping_price, order.currency)
 
-        lines = OrderLinesByOrderIdLoader(info.context).load(order.id)
-        manager = get_plugin_manager_promise(info.context)
-        return Promise.all([lines, manager]).then(_resolve_shipping_price)
+        return (
+            OrderPriceCalculationByOrderIdAndWebhookSyncLoader(info.context)
+            .load((order.id, root.allow_sync_webhooks))
+            .then(get_shipping_price)
+        )
 
     @staticmethod
     @traced_resolver
@@ -2148,21 +2279,15 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
     def resolve_shipping_tax_rate(root: SyncWebhookControlContext[models.Order], info):
         order = root.node
 
-        @allow_writer_in_context(info.context)
-        def _resolve_shipping_tax_rate(data):
-            lines, manager = data
-            database_connection_name = get_database_connection_name(info.context)
-            return calculations.order_shipping_tax_rate(
-                order,
-                manager,
-                lines,
-                database_connection_name=database_connection_name,
-                allow_sync_webhooks=root.allow_sync_webhooks,
-            ) or Decimal(0)
+        def _get_shipping_tax_rate(data):
+            order, _ = data
+            return order.shipping_tax_rate or Decimal(0)
 
-        lines = OrderLinesByOrderIdLoader(info.context).load(order.id)
-        manager = get_plugin_manager_promise(info.context)
-        return Promise.all([lines, manager]).then(_resolve_shipping_tax_rate)
+        return (
+            OrderPriceCalculationByOrderIdAndWebhookSyncLoader(info.context)
+            .load((order.id, root.allow_sync_webhooks))
+            .then(_get_shipping_tax_rate)
+        )
 
     @staticmethod
     def resolve_actions(root: SyncWebhookControlContext[models.Order], info):
@@ -2190,43 +2315,30 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
     def resolve_subtotal(root: SyncWebhookControlContext[models.Order], info):
         order = root.node
 
-        @allow_writer_in_context(info.context)
-        def _resolve_subtotal(data):
-            order_lines, manager = data
-            database_connection_name = get_database_connection_name(info.context)
-            return calculations.order_subtotal(
-                order,
-                manager,
-                order_lines,
-                database_connection_name=database_connection_name,
-                allow_sync_webhooks=root.allow_sync_webhooks,
-            )
+        def _get_subtotal(data):
+            order, _ = data
+            return quantize_price(order.subtotal, order.currency)
 
-        order_lines = OrderLinesByOrderIdLoader(info.context).load(order.id)
-        manager = get_plugin_manager_promise(info.context)
-
-        return Promise.all([order_lines, manager]).then(_resolve_subtotal)
+        return (
+            OrderPriceCalculationByOrderIdAndWebhookSyncLoader(info.context)
+            .load((order.id, root.allow_sync_webhooks))
+            .then(_get_subtotal)
+        )
 
     @staticmethod
     @traced_resolver
     @prevent_sync_event_circular_query
-    @plugin_manager_promise_callback
-    def resolve_total(root: SyncWebhookControlContext[models.Order], info, manager):
+    def resolve_total(root: SyncWebhookControlContext[models.Order], info):
         order = root.node
 
-        @allow_writer_in_context(info.context)
-        def _resolve_total(lines):
-            database_connection_name = get_database_connection_name(info.context)
-            return calculations.order_total(
-                order,
-                manager,
-                lines,
-                database_connection_name=database_connection_name,
-                allow_sync_webhooks=root.allow_sync_webhooks,
-            )
+        def _get_total(data):
+            order, _ = data
+            return quantize_price(order.total, order.currency)
 
         return (
-            OrderLinesByOrderIdLoader(info.context).load(order.id).then(_resolve_total)
+            OrderPriceCalculationByOrderIdAndWebhookSyncLoader(info.context)
+            .load((order.id, root.allow_sync_webhooks))
+            .then(_get_total)
         )
 
     @staticmethod
@@ -2235,21 +2347,15 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
     def resolve_undiscounted_total(root: SyncWebhookControlContext[models.Order], info):
         order = root.node
 
-        @allow_writer_in_context(info.context)
-        def _resolve_undiscounted_total(lines_and_manager):
-            lines, manager = lines_and_manager
-            database_connection_name = get_database_connection_name(info.context)
-            return calculations.order_undiscounted_total(
-                order,
-                manager,
-                lines,
-                database_connection_name=database_connection_name,
-                allow_sync_webhooks=root.allow_sync_webhooks,
-            )
+        def _get_undiscounted_total(data):
+            order, _ = data
+            return quantize_price(order.undiscounted_total, order.currency)
 
-        lines = OrderLinesByOrderIdLoader(info.context).load(order.id)
-        manager = get_plugin_manager_promise(info.context)
-        return Promise.all([lines, manager]).then(_resolve_undiscounted_total)
+        return (
+            OrderPriceCalculationByOrderIdAndWebhookSyncLoader(info.context)
+            .load((order.id, root.allow_sync_webhooks))
+            .then(_get_undiscounted_total)
+        )
 
     @staticmethod
     def resolve_total_authorized(root: SyncWebhookControlContext[models.Order], info):
@@ -2336,8 +2442,9 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
                 fulfillments_to_return = fulfillments
             else:
                 fulfillments_to_return = filter(
-                    lambda fulfillment: fulfillment.status
-                    != FulfillmentStatus.CANCELED,
+                    lambda fulfillment: (
+                        fulfillment.status != FulfillmentStatus.CANCELED
+                    ),
                     fulfillments,
                 )
             return [
@@ -2355,7 +2462,8 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
 
     @staticmethod
     def resolve_lines(root: SyncWebhookControlContext[models.Order], info):
-        def _wrap_with_sync_webhook_control_context(lines):
+        def _wrap_with_sync_webhook_control_context(data):
+            _order, lines = data
             return [
                 SyncWebhookControlContext(
                     node=line, allow_sync_webhooks=root.allow_sync_webhooks
@@ -2364,8 +2472,8 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
             ]
 
         return (
-            OrderLinesByOrderIdLoader(info.context)
-            .load(root.node.id)
+            OrderPromotionCalculateByOrderIdLoaderAndWebhookSyncLoader(info.context)
+            .load((root.node.id, root.allow_sync_webhooks))
             .then(_wrap_with_sync_webhook_control_context)
         )
 
@@ -2486,36 +2594,54 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
         return TransactionItemsByOrderIDLoader(info.context).load(root.node.id)
 
     @staticmethod
+    def resolve_transaction_summaries(
+        root: SyncWebhookControlContext[models.Order], info
+    ):
+        return (
+            TransactionItemsByOrderIDLoader(info.context)
+            .load(root.node.id)
+            .then(
+                lambda transactions: [
+                    transaction
+                    for transaction in transactions
+                    if transaction.has_money_movement()
+                ]
+            )
+        )
+
+    @staticmethod
     def resolve_status_display(root: SyncWebhookControlContext[models.Order], _info):
         return root.node.get_status_display()
 
     @staticmethod
+    @load_site_callback
     @traced_resolver
-    def resolve_can_finalize(root: SyncWebhookControlContext[models.Order], info):
+    def resolve_can_finalize(root: SyncWebhookControlContext[models.Order], info, site):
         order = root.node
         if order.status == OrderStatus.DRAFT:
 
             @allow_writer_in_context(info.context)
-            def _validate_draft_order(data):
-                lines, manager = data
+            def _validate_draft_order(lines):
                 country = get_order_country(order)
                 database_connection_name = get_database_connection_name(info.context)
-                try:
+                return (
                     validate_draft_order(
                         order=order,
                         lines=lines,
                         country=country,
-                        manager=manager,
+                        requestor=get_user_or_app_from_context(info.context),
                         database_connection_name=database_connection_name,
                         allow_sync_webhooks=root.allow_sync_webhooks,
+                        calculate_stocks_with_shipping_zones=(
+                            site.settings.use_legacy_shipping_zone_stock_availability
+                        ),
                     )
-                except ValidationError:
-                    return False
-                return True
+                    .then(lambda _: True)
+                    .catch(lambda _: False)
+                )
 
-            lines = OrderLinesByOrderIdLoader(info.context).load(order.id)
-            manager = get_plugin_manager_promise(info.context)
-            return Promise.all([lines, manager]).then(_validate_draft_order)
+            lines_dataloader = OrderLinesByOrderIdLoader(info.context).load(order.id)
+            return lines_dataloader.then(_validate_draft_order)
         return True
 
     @staticmethod
@@ -2530,10 +2656,13 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
             elif user:
                 email_to_return = user.email
 
-            if order.use_old_id is False or is_owner_or_has_one_of_perms(
+            if order.use_old_id is False:
+                return email_to_return
+            if user and is_owner_or_has_one_of_perms(
                 requester, user, OrderPermissions.MANAGE_ORDERS
             ):
                 return email_to_return
+
             return obfuscate_email(email_to_return)
 
         if not order.user_id:
@@ -2668,41 +2797,16 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
     @classmethod
     @traced_resolver
     @prevent_sync_event_circular_query
-    # TODO: We should optimize it in/after PR#5819
     def resolve_shipping_methods(
         cls, root: SyncWebhookControlContext[models.Order], info
     ):
-        order = root.node
-
-        def with_channel(data):
-            channel, manager = data
-            database_connection_name = get_database_connection_name(info.context)
-
-            @allow_writer_in_context(info.context)
-            def with_listings(channel_listings):
-                return get_valid_shipping_methods_for_order(
-                    order,
-                    channel_listings,
-                    manager,
-                    database_connection_name=database_connection_name,
-                    allow_sync_webhooks=root.allow_sync_webhooks,
-                )
-
-            return (
-                ShippingMethodChannelListingByChannelSlugLoader(info.context)
-                .load(channel.slug)
-                .then(with_listings)
-            )
-
-        channel = ChannelByIdLoader(info.context).load(order.channel_id)
-        manager = get_plugin_manager_promise(info.context)
-
-        return Promise.all([channel, manager]).then(with_channel)
+        return OrderShippingMethodsByOrderIdAndWebhookSyncLoader(info.context).load(
+            (root.node.id, root.allow_sync_webhooks)
+        )
 
     @classmethod
     @traced_resolver
     @prevent_sync_event_circular_query
-    # TODO: We should optimize it in/after PR#5819
     def resolve_available_shipping_methods(
         cls, root: SyncWebhookControlContext[models.Order], info
     ):
@@ -2732,11 +2836,14 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
     def resolve_invoices(root: SyncWebhookControlContext[models.Order], info):
         order = root.node
         requester = get_user_or_app_from_context(info.context)
-        if order.use_old_id is True:
+        if order.use_old_id is False:
+            return InvoicesByOrderIdLoader(info.context).load(order.id)
+        if order.user_id:
             check_is_owner_or_has_one_of_perms(
                 requester, order.user, OrderPermissions.MANAGE_ORDERS
             )
-        return InvoicesByOrderIdLoader(info.context).load(order.id)
+            return InvoicesByOrderIdLoader(info.context).load(order.id)
+        return []
 
     @staticmethod
     def resolve_is_shipping_required(
@@ -2786,32 +2893,38 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
         return graphene.Node.to_global_id("Order", root.node.original_id)
 
     @staticmethod
+    @load_site_callback
     @traced_resolver
-    def resolve_errors(root: SyncWebhookControlContext[models.Order], info):
+    def resolve_errors(root: SyncWebhookControlContext[models.Order], info, site):
         order = root.node
         if order.status == OrderStatus.DRAFT:
 
             @allow_writer_in_context(info.context)
-            def _validate_order(data):
-                lines, manager = data
+            def _validate_order(lines):
                 country = get_order_country(order)
                 database_connection_name = get_database_connection_name(info.context)
-                try:
+                return (
                     validate_draft_order(
                         order=order,
                         lines=lines,
                         country=country,
-                        manager=manager,
+                        requestor=get_user_or_app_from_context(info.context),
                         database_connection_name=database_connection_name,
                         allow_sync_webhooks=root.allow_sync_webhooks,
+                        calculate_stocks_with_shipping_zones=(
+                            site.settings.use_legacy_shipping_zone_stock_availability
+                        ),
                     )
-                except ValidationError as e:
-                    return validation_error_to_error_type(e, OrderError)
-                return []
+                    .then(lambda _: [])
+                    .catch(
+                        lambda e: validation_error_to_error_type(
+                            cast(ValidationError, e), OrderError
+                        )
+                    )
+                )
 
-            lines = OrderLinesByOrderIdLoader(info.context).load(order.id)
-            manager = get_plugin_manager_promise(info.context)
-            return Promise.all([lines, manager]).then(_validate_order)
+            lines_dataloader = OrderLinesByOrderIdLoader(info.context).load(order.id)
+            return lines_dataloader.then(_validate_order)
 
         return []
 

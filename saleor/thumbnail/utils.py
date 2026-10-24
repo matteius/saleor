@@ -1,3 +1,5 @@
+import logging
+import mimetypes
 import os
 import secrets
 from io import BytesIO
@@ -11,6 +13,7 @@ from django.core.files.storage import default_storage
 from django.urls import reverse
 from PIL import Image
 
+from ..product import ProductMediaTypes
 from . import (
     DEFAULT_THUMBNAIL_SIZE,
     FILE_NAME_MAX_LENGTH,
@@ -19,9 +22,12 @@ from . import (
     IconThumbnailFormat,
     ThumbnailFormat,
 )
+from .exceptions import ImageTooLargeError
 
 if TYPE_CHECKING:
     from .models import Thumbnail
+
+logger = logging.getLogger(__name__)
 
 
 def get_image_or_proxy_url(
@@ -47,6 +53,16 @@ def prepare_image_proxy_url(
     if format and format.lower() != ThumbnailFormat.ORIGINAL:
         kwargs["format"] = format.lower()
     return reverse("thumbnail", kwargs=kwargs)
+
+
+def get_original_image_proxy_url(
+    instance_pk: str,
+    object_type: str,
+):
+    instance_id = graphene.Node.to_global_id(object_type, instance_pk)
+    kwargs = {"instance_id": instance_id}
+
+    return reverse("original-image", kwargs=kwargs)
 
 
 def get_thumbnail_size(size: int | None) -> int:
@@ -130,7 +146,25 @@ class ProcessedImage:
         if isinstance(self.image_source, str):
             image = self.storage.open(self.image_source, "rb")
         image_format = self.get_image_metadata_from_file(image)
-        return (Image.open(image), image_format)
+        try:
+            return (Image.open(image), image_format)
+        except Image.DecompressionBombError as e:
+            source = self.get_image_source_name()
+            logger.warning(
+                "Refusing to decode image %s, it exceeds the pixel limit: %s",
+                source,
+                e,
+                extra={"image_source": source, "pillow_error": str(e)},
+            )
+            raise ImageTooLargeError(
+                f"Image {source} exceeds the maximum allowed number of pixels: {e}"
+            ) from e
+
+    def get_image_source_name(self) -> str:
+        """Return the storage path of the source image, for logging."""
+        if isinstance(self.image_source, str):
+            return self.image_source
+        return getattr(self.image_source, "name", "") or ""
 
     @classmethod
     def get_image_metadata_from_file(cls, file_like):
@@ -253,10 +287,22 @@ class ProcessedIconImage(ProcessedImage):
     LOSSLESS_WEBP = True
 
 
-def get_filename_from_url(url: str) -> str:
+def get_filename_from_url(url: str, mime_type: str | None = None) -> str:
     """Prepare a unique filename for file from the URL to avoid overwriting."""
     file_name = os.path.basename(urlparse(url).path)
     name, format = os.path.splitext(file_name)
+    if not format and mime_type:
+        # If the URL does not include a file extension, guess it based on the mime type
+        format = mimetypes.guess_extension(mime_type, strict=False) or ""
     name = name[:FILE_NAME_MAX_LENGTH]
     hash = secrets.token_hex(nbytes=4)
     return f"{name}_{hash}{format}"
+
+
+def is_product_media_image_pending(object_type: str, instance) -> bool:
+    """Check if instance is a ProductMedia of IMAGE type with a pending image download."""
+    return (
+        object_type == "ProductMedia"
+        and instance.type == ProductMediaTypes.IMAGE
+        and instance.external_url
+    )

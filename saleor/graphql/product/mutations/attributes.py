@@ -228,18 +228,21 @@ class ProductAttributeAssign(BaseMutation, VariantAssignmentValidationMixin):
         variant_attrs_pks = [pk for pk, _, __ in variant_attrs_data]
 
         attrs_pk = product_attrs_pks + variant_attrs_pks
-        attributes = attribute_models.Attribute.objects.filter(
-            id__in=attrs_pk
-        ).values_list("pk", flat=True)
-        if len(attrs_pk) != len(attributes):
-            invalid_attrs = set(attrs_pk) - set(attributes)
-            invalid_attrs = [
-                graphene.Node.to_global_id("Attribute", pk) for pk in invalid_attrs
+        found_pks = {
+            str(pk)
+            for pk in attribute_models.Attribute.objects.filter(
+                pk__in=attrs_pk
+            ).values_list("pk", flat=True)
+        }
+        missing_pks = [pk for pk in attrs_pk if pk not in found_pks]
+        if missing_pks:
+            missing_attrs = [
+                graphene.Node.to_global_id("Attribute", pk) for pk in missing_pks
             ]
             error = ValidationError(
                 "Attribute doesn't exist.",
                 code=ProductErrorCode.NOT_FOUND.value,
-                params={"attributes": list(invalid_attrs)},
+                params={"attributes": missing_attrs},
             )
             errors["operations"].append(error)
 
@@ -284,17 +287,6 @@ class ProductAttributeAssign(BaseMutation, VariantAssignmentValidationMixin):
 
         # Resolve all the passed IDs to ints
         product_attrs_data, variant_attrs_data = cls.get_operations(info, operations)
-        variant_attrs_pks = [pk for pk, _, __ in variant_attrs_data]
-
-        if variant_attrs_pks and not product_type.has_variants:
-            raise ValidationError(
-                {
-                    "operations": ValidationError(
-                        "Variants are disabled in this product type.",
-                        code=ProductErrorCode.ATTRIBUTE_VARIANTS_DISABLED.value,
-                    )
-                }
-            )
 
         # Ensure the attribute are assignable
         cls.clean_operations(product_type, product_attrs_data, variant_attrs_data)

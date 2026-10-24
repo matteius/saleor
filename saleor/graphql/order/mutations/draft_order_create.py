@@ -41,6 +41,7 @@ from ...meta.inputs import MetadataInput, MetadataInputDescription
 from ...plugins.dataloaders import get_plugin_manager_promise
 from ...product.types import ProductVariant
 from ...shipping.utils import get_shipping_model_by_object_id
+from ...site.dataloaders import get_site_promise
 from ..types import Order
 from ..utils import (
     OrderLineData,
@@ -121,7 +122,8 @@ class DraftOrderInput(BaseInputObjectType):
         description="ID of a selected shipping method.", name="shippingMethod"
     )
     voucher = graphene.ID(
-        description="ID of the voucher associated with the order.",
+        description=f"ID of the voucher associated with the order."
+        f"{DEPRECATED_IN_3X_INPUT} Use `voucherCode` instead.",
         name="voucher",
         deprecation_reason="Use `voucherCode` instead.",
     )
@@ -368,14 +370,15 @@ class DraftOrderCreate(
         cleaned_input["lines_data"] = grouped_lines_data
 
     @staticmethod
-    def _save_lines(info, instance, lines_data, app, manager):
+    def _save_lines(info, instance, lines_data, app, requestor, site_settings):
         lines = []
         if lines_data:
             for line_data in lines_data:
                 new_line = create_order_line(
                     instance,
                     line_data,
-                    manager,
+                    requestor,
+                    site_settings,
                 )
                 lines.append(new_line)
 
@@ -391,6 +394,8 @@ class DraftOrderCreate(
     def save(cls, info: ResolveInfo, instance, cleaned_input, instance_tracker=None):
         manager = get_plugin_manager_promise(info.context).get()
         app = get_app_promise(info.context).get()
+        site = get_site_promise(info.context).get()
+        requestor = app or info.context.user
 
         with traced_atomic_transaction():
             # Process addresses
@@ -399,7 +404,12 @@ class DraftOrderCreate(
             try:
                 # Process any lines to add
                 cls._save_lines(
-                    info, instance, cleaned_input.get("lines_data"), app, manager
+                    info,
+                    instance,
+                    cleaned_input.get("lines_data"),
+                    app,
+                    requestor,
+                    site.settings,
                 )
             except TaxError as e:
                 raise ValidationError(
@@ -413,8 +423,11 @@ class DraftOrderCreate(
                     ShippingMethodUpdateMixin.clear_shipping_method_from_order(instance)
                 else:
                     ShippingMethodUpdateMixin.process_shipping_method(
-                        instance, method, manager, update_shipping_discount=False
-                    )
+                        instance,
+                        method,
+                        requestor=app or info.context.user,
+                        update_shipping_discount=False,
+                    ).get()
 
             if "voucher" in cleaned_input:
                 cls.handle_order_voucher(

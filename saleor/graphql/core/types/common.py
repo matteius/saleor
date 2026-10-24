@@ -26,7 +26,7 @@ from ...core.doc_category import (
     DOC_CATEGORY_WEBHOOKS,
 )
 from ...core.scalars import DateTime, Decimal
-from ..descriptions import ADDED_IN_318
+from ..descriptions import ADDED_IN_318, ADDED_IN_323
 from ..enums import (
     AccountErrorCode,
     AppErrorCode,
@@ -39,6 +39,7 @@ from ..enums import (
     CheckoutErrorCode,
     CollectionErrorCode,
     CustomerBulkUpdateErrorCode,
+    DeliveryOptionsCalculateErrorCode,
     DiscountErrorCode,
     ExportErrorCode,
     ExternalNotificationTriggerErrorCode,
@@ -69,6 +70,7 @@ from ..enums import (
     ProductVariantBulkErrorCode,
     ProductVariantTranslateErrorCode,
     RefundSettingsErrorCode,
+    ReturnSettingsErrorCode,
     SendConfirmationEmailErrorCode,
     ShippingErrorCode,
     ShopErrorCode,
@@ -186,6 +188,11 @@ class AccountError(Error):
     address_type = AddressTypeEnum(
         description="A type of address that causes the error.", required=False
     )
+    attributes = NonNullList(
+        graphene.ID,
+        description="List of attributes IDs which causes the error." + ADDED_IN_323,
+        required=False,
+    )
 
     class Meta:
         description = "Represents errors in account mutations."
@@ -278,6 +285,11 @@ class CheckoutError(Error):
 
 class CustomerBulkUpdateError(BulkError):
     code = CustomerBulkUpdateErrorCode(description="The error code.", required=True)
+    attributes = NonNullList(
+        graphene.ID,
+        description="List of attributes IDs which causes the error." + ADDED_IN_323,
+        required=False,
+    )
 
     class Meta:
         doc_category = DOC_CATEGORY_USERS
@@ -365,6 +377,24 @@ class RefundSettingsUpdateError(Error):
 class RefundReasonReferenceTypeClearError(Error):
     code = RefundSettingsErrorCode(
         description="Failed to clear refund reason reference type", required=True
+    )
+
+    class Meta:
+        doc_category = DOC_CATEGORY_SHOP
+
+
+class ReturnSettingsUpdateError(Error):
+    code = ReturnSettingsErrorCode(
+        description="Failed to update Return Settings", required=True
+    )
+
+    class Meta:
+        doc_category = DOC_CATEGORY_SHOP
+
+
+class ReturnReasonReferenceTypeClearError(Error):
+    code = ReturnSettingsErrorCode(
+        description="Failed to clear return reason reference type", required=True
     )
 
     class Meta:
@@ -608,6 +638,15 @@ class ShippingError(Error):
         graphene.ID,
         description="List of channels IDs which causes the error.",
         required=False,
+    )
+
+    class Meta:
+        doc_category = DOC_CATEGORY_SHIPPING
+
+
+class DeliveryOptionsCalculateError(Error):
+    code = DeliveryOptionsCalculateErrorCode(
+        description="The error code.", required=True
     )
 
     class Meta:

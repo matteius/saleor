@@ -6,6 +6,7 @@ from ..permission.enums import (
     BasePermissionEnum,
     ChannelPermissions,
     CheckoutPermissions,
+    CustomerTypePermissions,
     DiscountPermissions,
     GiftcardPermissions,
     MenuPermissions,
@@ -119,6 +120,10 @@ class WebhookEventAsyncType:
     CUSTOMER_DELETED = "customer_deleted"
     CUSTOMER_METADATA_UPDATED = "customer_metadata_updated"
 
+    CUSTOMER_TYPE_CREATED = "customer_type_created"
+    CUSTOMER_TYPE_UPDATED = "customer_type_updated"
+    CUSTOMER_TYPE_DELETED = "customer_type_deleted"
+
     COLLECTION_CREATED = "collection_created"
     COLLECTION_UPDATED = "collection_updated"
     COLLECTION_DELETED = "collection_deleted"
@@ -138,10 +143,23 @@ class WebhookEventAsyncType:
     PRODUCT_VARIANT_UPDATED = "product_variant_updated"
     PRODUCT_VARIANT_DELETED = "product_variant_deleted"
     PRODUCT_VARIANT_METADATA_UPDATED = "product_variant_metadata_updated"
+    PRODUCT_VARIANT_DISCOUNTED_PRICE_UPDATED = (
+        "product_variant_discounted_price_updated"
+    )
 
     PRODUCT_VARIANT_OUT_OF_STOCK = "product_variant_out_of_stock"
     PRODUCT_VARIANT_BACK_IN_STOCK = "product_variant_back_in_stock"
     PRODUCT_VARIANT_STOCK_UPDATED = "product_variant_stock_updated"
+    PRODUCT_VARIANT_OUT_OF_STOCK_IN_CHANNEL = "product_variant_out_of_stock_in_channel"
+    PRODUCT_VARIANT_BACK_IN_STOCK_IN_CHANNEL = (
+        "product_variant_back_in_stock_in_channel"
+    )
+    PRODUCT_VARIANT_OUT_OF_STOCK_FOR_CLICK_AND_COLLECT = (
+        "product_variant_out_of_stock_for_click_and_collect"
+    )
+    PRODUCT_VARIANT_BACK_IN_STOCK_FOR_CLICK_AND_COLLECT = (
+        "product_variant_back_in_stock_for_click_and_collect"
+    )
 
     CHECKOUT_CREATED = "checkout_created"
     CHECKOUT_UPDATED = "checkout_updated"
@@ -369,46 +387,57 @@ class WebhookEventAsyncType:
         ORDER_CREATED: {
             "name": "Order created",
             "permission": OrderPermissions.MANAGE_ORDERS,
+            "is_deferred_payload": True,
         },
         ORDER_CONFIRMED: {
             "name": "Order confirmed",
             "permission": OrderPermissions.MANAGE_ORDERS,
+            "is_deferred_payload": True,
         },
         ORDER_PAID: {
             "name": "Order paid",
             "permission": OrderPermissions.MANAGE_ORDERS,
+            "is_deferred_payload": True,
         },
         ORDER_FULLY_PAID: {
             "name": "Order fully paid",
             "permission": OrderPermissions.MANAGE_ORDERS,
+            "is_deferred_payload": True,
         },
         ORDER_REFUNDED: {
             "name": "Order refunded",
             "permission": OrderPermissions.MANAGE_ORDERS,
+            "is_deferred_payload": True,
         },
         ORDER_FULLY_REFUNDED: {
             "name": "Order fully refunded",
             "permission": OrderPermissions.MANAGE_ORDERS,
+            "is_deferred_payload": True,
         },
         ORDER_UPDATED: {
             "name": "Order updated",
             "permission": OrderPermissions.MANAGE_ORDERS,
+            "is_deferred_payload": True,
         },
         ORDER_CANCELLED: {
             "name": "Order cancelled",
             "permission": OrderPermissions.MANAGE_ORDERS,
+            "is_deferred_payload": True,
         },
         ORDER_EXPIRED: {
             "name": "Order expired",
             "permission": OrderPermissions.MANAGE_ORDERS,
+            "is_deferred_payload": True,
         },
         ORDER_FULFILLED: {
             "name": "Order fulfilled",
             "permission": OrderPermissions.MANAGE_ORDERS,
+            "is_deferred_payload": True,
         },
         ORDER_METADATA_UPDATED: {
             "name": "Order metadata updated",
             "permission": OrderPermissions.MANAGE_ORDERS,
+            "is_deferred_payload": True,
         },
         ORDER_BULK_CREATED: {
             "name": "Order bulk created",
@@ -421,6 +450,7 @@ class WebhookEventAsyncType:
         FULFILLMENT_CANCELED: {
             "name": "Fulfillment cancelled",
             "permission": OrderPermissions.MANAGE_ORDERS,
+            "is_deferred_payload": True,
         },
         FULFILLMENT_APPROVED: {
             "name": "Fulfillment approved",
@@ -429,18 +459,22 @@ class WebhookEventAsyncType:
         FULFILLMENT_METADATA_UPDATED: {
             "name": "Fulfillment metadata updated",
             "permission": OrderPermissions.MANAGE_ORDERS,
+            "is_deferred_payload": True,
         },
         FULFILLMENT_TRACKING_NUMBER_UPDATED: {
             "name": "Fulfillment tracking number updated.",
             "permission": OrderPermissions.MANAGE_ORDERS,
+            "is_deferred_payload": True,
         },
         DRAFT_ORDER_CREATED: {
             "name": "Draft order created",
             "permission": OrderPermissions.MANAGE_ORDERS,
+            "is_deferred_payload": True,
         },
         DRAFT_ORDER_UPDATED: {
             "name": "Draft order updated",
             "permission": OrderPermissions.MANAGE_ORDERS,
+            "is_deferred_payload": True,
         },
         DRAFT_ORDER_DELETED: {
             "name": "Draft order deleted",
@@ -522,6 +556,24 @@ class WebhookEventAsyncType:
             "name": "Customer metadata updated",
             "permission": AccountPermissions.MANAGE_USERS,
         },
+        CUSTOMER_TYPE_CREATED: {
+            "name": "Customer type created",
+            "permission": (
+                CustomerTypePermissions.MANAGE_CUSTOMER_TYPES_AND_ATTRIBUTES
+            ),
+        },
+        CUSTOMER_TYPE_UPDATED: {
+            "name": "Customer type updated",
+            "permission": (
+                CustomerTypePermissions.MANAGE_CUSTOMER_TYPES_AND_ATTRIBUTES
+            ),
+        },
+        CUSTOMER_TYPE_DELETED: {
+            "name": "Customer type deleted",
+            "permission": (
+                CustomerTypePermissions.MANAGE_CUSTOMER_TYPES_AND_ATTRIBUTES
+            ),
+        },
         COLLECTION_CREATED: {
             "name": "Collection created",
             "permission": ProductPermissions.MANAGE_PRODUCTS,
@@ -597,6 +649,31 @@ class WebhookEventAsyncType:
         PRODUCT_VARIANT_STOCK_UPDATED: {
             "name": "Product variant stock updated",
             "permission": ProductPermissions.MANAGE_PRODUCTS,
+        },
+        PRODUCT_VARIANT_OUT_OF_STOCK_IN_CHANNEL: {
+            "name": "Product variant out of stock in channel",
+            "permission": ProductPermissions.MANAGE_PRODUCTS,
+            "is_deferred_payload": True,
+        },
+        PRODUCT_VARIANT_BACK_IN_STOCK_IN_CHANNEL: {
+            "name": "Product variant back in stock in channel",
+            "permission": ProductPermissions.MANAGE_PRODUCTS,
+            "is_deferred_payload": True,
+        },
+        PRODUCT_VARIANT_OUT_OF_STOCK_FOR_CLICK_AND_COLLECT: {
+            "name": "Product variant out of stock for click and collect",
+            "permission": ProductPermissions.MANAGE_PRODUCTS,
+            "is_deferred_payload": True,
+        },
+        PRODUCT_VARIANT_BACK_IN_STOCK_FOR_CLICK_AND_COLLECT: {
+            "name": "Product variant back in stock for click and collect",
+            "permission": ProductPermissions.MANAGE_PRODUCTS,
+            "is_deferred_payload": True,
+        },
+        PRODUCT_VARIANT_DISCOUNTED_PRICE_UPDATED: {
+            "name": "Product variant discounted price updated",
+            "permission": ProductPermissions.MANAGE_PRODUCTS,
+            "is_deferred_payload": True,
         },
         CHECKOUT_CREATED: {
             "name": "Checkout created",
@@ -937,11 +1014,6 @@ class WebhookEventSyncType:
         PAYMENT_PROCESS,
         PAYMENT_REFUND,
         PAYMENT_VOID,
-    ]
-    CHECKOUT_EVENTS = [
-        SHIPPING_LIST_METHODS_FOR_CHECKOUT,
-        CHECKOUT_FILTER_SHIPPING_METHODS,
-        CHECKOUT_CALCULATE_TAXES,
     ]
     ORDER_EVENTS = [ORDER_CALCULATE_TAXES, ORDER_FILTER_SHIPPING_METHODS]
 

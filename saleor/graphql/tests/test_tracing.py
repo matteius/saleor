@@ -308,11 +308,13 @@ def test_tracing_query_identifier_with_fragment(
     assert span.attributes[saleor_attributes.GRAPHQL_OPERATION_IDENTIFIER] == "products"
 
 
+@patch("saleor.account.throttling.cache")
 def test_tracing_query_identifier_for_unnamed_mutation(
-    staff_api_client,
-    get_test_spans,
+    mocked_cache, staff_api_client, get_test_spans, setup_mock_for_cache
 ):
     # given
+    setup_mock_for_cache({}, mocked_cache)
+
     query = """
         mutation{
           tokenCreate(email: "admin@example.com", password:"admin"){
@@ -331,11 +333,12 @@ def test_tracing_query_identifier_for_unnamed_mutation(
     )
 
 
+@patch("saleor.account.throttling.cache")
 def test_tracing_query_identifier_for_named_mutation(
-    staff_api_client,
-    get_test_spans,
+    mocked_cache, staff_api_client, get_test_spans, setup_mock_for_cache
 ):
     # given
+    setup_mock_for_cache({}, mocked_cache)
     query = """
         mutation MutationName{
           tokenCreate(email: "admin@example.com", password:"admin"){
@@ -354,11 +357,16 @@ def test_tracing_query_identifier_for_named_mutation(
     )
 
 
+@patch("saleor.account.throttling.cache")
 def test_tracing_query_identifier_for_many_mutations(
+    mocked_cache,
     staff_api_client,
     get_test_spans,
+    setup_mock_for_cache,
 ):
     # given
+    setup_mock_for_cache({}, mocked_cache)
+
     query = """
       mutation {
         tokenCreate(email: "admin@example.com", password:"admin"){
@@ -546,7 +554,7 @@ def test_graphql_query_span_set_status_error_invalid_query(
     mock_start_span.return_value.__enter__.return_value = mock_span
 
     request = rf.post(
-        path="/graphql",
+        path="/graphql/",
         data=data,
         content_type="application/json",
     )

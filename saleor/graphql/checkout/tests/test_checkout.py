@@ -26,12 +26,12 @@ from ....checkout.checkout_cleaner import (
     clean_checkout_payment,
     clean_checkout_shipping,
 )
+from ....checkout.delivery_context import PRIVATE_META_APP_SHIPPING_ID
 from ....checkout.error_codes import CheckoutErrorCode
 from ....checkout.fetch import fetch_checkout_info, fetch_checkout_lines
 from ....checkout.models import Checkout
+from ....checkout.tests.utils import add_variant_to_checkout
 from ....checkout.utils import (
-    PRIVATE_META_APP_SHIPPING_ID,
-    add_variant_to_checkout,
     add_voucher_to_checkout,
 )
 from ....core.db.connection import allow_writer
@@ -86,6 +86,33 @@ def expected_gift_card_payment_gateway():
         "id": GIFT_CARD_PAYMENT_GATEWAY_ID,
         "name": GIFT_CARD_PAYMENT_GATEWAY_NAME,
     }
+
+
+SHIPPING_LIST_METHODS_FOR_CHECKOUT_SUBSCRIPTION = """
+subscription{
+  event{
+    ...on ShippingListMethodsForCheckout{
+      checkout{
+        id
+      }
+      shippingMethods{
+        name
+        id
+      }
+    }
+  }
+}
+"""
+
+
+@pytest.fixture
+def subscription_shipping_list_methods_for_checkout_webhook(subscription_webhook):
+    from ....webhook.event_types import WebhookEventSyncType
+
+    return subscription_webhook(
+        SHIPPING_LIST_METHODS_FOR_CHECKOUT_SUBSCRIPTION,
+        WebhookEventSyncType.SHIPPING_LIST_METHODS_FOR_CHECKOUT,
+    )
 
 
 GET_CHECKOUT_PAYMENTS_QUERY = """
@@ -458,10 +485,7 @@ query getCheckout($id: ID) {
 """
 
 
-@mock.patch(
-    "saleor.plugins.webhook.plugin.WebhookPlugin.excluded_shipping_methods_for_checkout"
-)
-@override_settings(PLUGINS=["saleor.plugins.webhook.plugin.WebhookPlugin"])
+@mock.patch("saleor.checkout.webhooks.exclude_shipping.get_excluded_shipping_data")
 def test_query_checkout_empty_address_with_shipping_method_without_exclude_webhook(
     mock_excluded_shipping_methods_for_checkout,
     api_client,
@@ -489,7 +513,7 @@ def test_query_checkout_empty_address_with_shipping_method_without_exclude_webho
 
 
 @mock.patch(
-    "saleor.plugins.webhook.plugin.WebhookPlugin.excluded_shipping_methods_for_checkout"
+    "saleor.checkout.webhooks.exclude_shipping.excluded_shipping_methods_for_checkout"
 )
 @override_settings(PLUGINS=["saleor.plugins.webhook.plugin.WebhookPlugin"])
 def test_query_checkout_with_address_with_shipping_method_without_exclude_webhook(
@@ -657,7 +681,6 @@ def test_checkout_deliveries_with_price_based_shipping_method_and_discount(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_with_item.shipping_address,
     )
 
     checkout_with_item.discount_amount = Decimal(5.0)
@@ -699,7 +722,6 @@ def test_checkout_deliveries_with_price_based_shipping_and_shipping_discount(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_with_item.shipping_address,
     )
 
     checkout_with_item.discount_amount = Decimal(5.0)
@@ -759,7 +781,6 @@ def test_checkout_deliveries_with_price_based_method_and_product_voucher(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_with_item.shipping_address,
     )
     shipping_method.name = "Price based"
     shipping_method.save(update_fields=["name"])
@@ -835,6 +856,7 @@ def test_checkout_available_shipping_methods_with_price_displayed(
     site_settings,
     shipping_app,
 ):
+    send_webhook_request_sync.return_value = []
     shipping_method = shipping_zone.shipping_methods.first()
     listing = shipping_zone.shipping_methods.first().channel_listings.first()
     expected_shipping_price = Money(10, "USD")
@@ -2024,7 +2046,6 @@ def test_checkout_prices(user_api_client, checkout_with_item):
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_with_item.shipping_address,
     )
     assert data["totalPrice"]["gross"]["amount"] == (total.gross.amount)
 
@@ -2032,7 +2053,6 @@ def test_checkout_prices(user_api_client, checkout_with_item):
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_with_item.shipping_address,
     )
     assert data["subtotalPrice"]["gross"]["amount"] == (subtotal.gross.amount)
 
@@ -2217,14 +2237,12 @@ def test_checkout_prices_with_promotion(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout.shipping_address,
     )
     assert data["totalPrice"]["gross"]["amount"] == (total.gross.amount)
     subtotal = calculations.checkout_subtotal(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout.shipping_address,
     )
     assert data["subtotalPrice"]["gross"]["amount"] == (subtotal.gross.amount)
     line_info = lines[0]
@@ -2696,14 +2714,12 @@ def test_checkout_prices_with_promotion_line_deleted_in_meantime(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout.shipping_address,
     )
     assert data["totalPrice"]["gross"]["amount"] == (total.gross.amount)
     subtotal = calculations.checkout_subtotal(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout.shipping_address,
     )
     assert data["subtotalPrice"]["gross"]["amount"] == (subtotal.gross.amount)
     line_info = lines[0]
@@ -2757,13 +2773,11 @@ def test_checkout_prices_with_promotion_one_line_deleted_in_meantime(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout.shipping_address,
     )
     subtotal = calculations.checkout_subtotal(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout.shipping_address,
     )
 
     def delete_checkout_line(*args, **kwargs):
@@ -2836,7 +2850,7 @@ def test_checkout_display_gross_prices_use_default(user_api_client, checkout_wit
     wraps=_calculate_and_add_tax,
 )
 @mock.patch(
-    "saleor.checkout.calculations.fetch_checkout_data",
+    "saleor.graphql.checkout.dataloaders.calculations.fetch_checkout_data",
     wraps=fetch_checkout_data,
 )
 def test_checkout_prices_with_checkout_updated_during_price_recalculation(
@@ -2874,8 +2888,8 @@ def test_checkout_prices_with_checkout_updated_during_price_recalculation(
     # then
     assert data["token"] == str(checkout.token)
 
-    # Ensure that the checkout prices recalculation was triggered more than one time
-    assert mock_fetch_checkout_data.call_count > 1
+    # Ensure that the checkout prices recalculation was triggered only once time
+    assert mock_fetch_checkout_data.call_count == 1
 
     # Ensure that the checkout price are recalculated only one time
     assert mock_calculate_and_add_tax.call_count == 1
@@ -2946,14 +2960,12 @@ def test_checkout_prices_with_specific_voucher(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_info.shipping_address,
     )
     assert data["totalPrice"]["gross"]["amount"] == (total.gross.amount)
     subtotal = calculations.checkout_subtotal(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_info.shipping_address,
     )
     assert data["subtotalPrice"]["gross"]["amount"] == (subtotal.gross.amount)
     line_info = lines[0]
@@ -3031,14 +3043,12 @@ def test_checkout_prices_with_specific_voucher_when_line_without_listing(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_info.shipping_address,
     )
     assert data["totalPrice"]["gross"]["amount"] == total.gross.amount
     subtotal = calculations.checkout_subtotal(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_info.shipping_address,
     )
     assert data["subtotalPrice"]["gross"]["amount"] == subtotal.gross.amount
     line_info = lines[0]
@@ -3105,14 +3115,12 @@ def test_checkout_prices_with_voucher_once_per_order(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_info.shipping_address,
     )
     assert data["totalPrice"]["gross"]["amount"] == (total.gross.amount)
     subtotal = calculations.checkout_subtotal(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_info.shipping_address,
     )
     assert data["subtotalPrice"]["gross"]["amount"] == (subtotal.gross.amount)
     line_info = lines[0]
@@ -3194,14 +3202,12 @@ def test_checkout_prices_with_voucher_once_per_order_when_line_without_listing(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_info.shipping_address,
     )
     assert data["totalPrice"]["gross"]["amount"] == (total.gross.amount)
     subtotal = calculations.checkout_subtotal(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_info.shipping_address,
     )
     assert data["subtotalPrice"]["gross"]["amount"] == (subtotal.gross.amount)
     line_info = lines[0]
@@ -3270,14 +3276,12 @@ def test_checkout_prices_with_voucher(user_api_client, checkout_with_item_and_vo
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_info.shipping_address,
     )
     assert data["totalPrice"]["gross"]["amount"] == (total.gross.amount)
     subtotal = calculations.checkout_subtotal(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_info.shipping_address,
     )
     assert data["subtotalPrice"]["gross"]["amount"] == (subtotal.gross.amount)
     line_info = lines[0]
@@ -3359,14 +3363,12 @@ def test_checkout_prices_with_voucher_when_line_without_listing(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_info.shipping_address,
     )
     assert data["totalPrice"]["gross"]["amount"] == total.gross.amount
     subtotal = calculations.checkout_subtotal(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_info.shipping_address,
     )
     assert data["subtotalPrice"]["gross"]["amount"] == subtotal.gross.amount
     line_info = lines[0]
@@ -3438,14 +3440,12 @@ def test_checkout_prices_with_voucher_code_that_doesnt_exist(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_info.shipping_address,
     )
     assert data["totalPrice"]["gross"]["amount"] == (total.gross.amount)
     subtotal = calculations.checkout_subtotal(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_info.shipping_address,
     )
     assert data["subtotalPrice"]["gross"]["amount"] == (subtotal.gross.amount)
     line_info = lines[0]
@@ -3529,14 +3529,12 @@ def test_checkout_prices_voucher_code_that_doesnt_exist_when_line_without_listin
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_info.shipping_address,
     )
     assert data["totalPrice"]["gross"]["amount"] == (total.gross.amount)
     subtotal = calculations.checkout_subtotal(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_info.shipping_address,
     )
     assert data["subtotalPrice"]["gross"]["amount"] == (subtotal.gross.amount)
     line_info = lines[0]
@@ -3597,7 +3595,8 @@ def test_checkout_prices_variant_listing_price_changed(
         manager,
         lines,
         force_update=True,
-    )
+        requestor=None,
+    ).get()
 
     line = lines[0]
     listing = line.variant.channel_listings.get(
@@ -3623,7 +3622,6 @@ def test_checkout_prices_variant_listing_price_changed(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_with_item.shipping_address,
     )
     assert data["totalPrice"]["gross"]["amount"] == (total.gross.amount)
 
@@ -3631,7 +3629,6 @@ def test_checkout_prices_variant_listing_price_changed(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_with_item.shipping_address,
     )
     assert data["subtotalPrice"]["gross"]["amount"] == (subtotal.gross.amount)
 
@@ -3671,11 +3668,8 @@ def test_checkout_prices_expired_variant_listing_price_changed(
     lines, _ = fetch_checkout_lines(checkout_with_item)
     checkout_info = fetch_checkout_info(checkout_with_item, lines, manager)
     calculations.fetch_checkout_data(
-        checkout_info,
-        manager,
-        lines,
-        force_update=True,
-    )
+        checkout_info, manager, lines, force_update=True, requestor=None
+    ).get()
     checkout_with_item.price_expiration = timezone.now() - datetime.timedelta(days=1)
     checkout_with_item.discount_expiration = timezone.now() - datetime.timedelta(days=1)
     checkout_with_item.save(update_fields=["price_expiration", "discount_expiration"])
@@ -3705,7 +3699,6 @@ def test_checkout_prices_expired_variant_listing_price_changed(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_with_item.shipping_address,
     )
     assert data["totalPrice"]["gross"]["amount"] == (total.gross.amount)
 
@@ -3713,7 +3706,6 @@ def test_checkout_prices_expired_variant_listing_price_changed(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout_with_item.shipping_address,
     )
     assert data["subtotalPrice"]["gross"]["amount"] == (subtotal.gross.amount)
 
@@ -3884,7 +3876,7 @@ def test_query_checkouts_do_not_trigger_sync_tax_webhooks(
         force_update=False,
         lines=lines,
         manager=mock.ANY,
-        pregenerated_subscription_payloads=mock.ANY,
+        requestor=staff_api_client.user,
     )
 
 
@@ -3935,7 +3927,7 @@ def test_query_checkouts_calculate_flat_taxes(
         force_update=False,
         lines=lines,
         manager=mock.ANY,
-        pregenerated_subscription_payloads=mock.ANY,
+        requestor=staff_api_client.user,
     )
 
 
@@ -4030,7 +4022,7 @@ def test_query_checkout_lines_do_not_trigger_sync_tax_webhooks(
         force_update=False,
         lines=lines,
         manager=mock.ANY,
-        pregenerated_subscription_payloads=mock.ANY,
+        requestor=staff_api_client.user,
     )
 
 
@@ -4077,7 +4069,7 @@ def test_query_checkout_lines_calculate_flat_taxes(
         force_update=False,
         lines=lines,
         manager=mock.ANY,
-        pregenerated_subscription_payloads=mock.ANY,
+        requestor=staff_api_client.user,
     )
 
 
@@ -4180,7 +4172,9 @@ def test_clean_checkout(
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     manager = get_plugins_manager(allow_replica=False)
     total = calculations.calculate_checkout_total(
-        manager=manager, checkout_info=checkout_info, lines=lines, address=address
+        manager=manager,
+        checkout_info=checkout_info,
+        lines=lines,
     )
 
     payment = payment_dummy
@@ -5329,9 +5323,8 @@ def test_checkout_delivery_returns_none_when_no_delivery_assigned(
 
 @freezegun.freeze_time("2023-01-01 12:00:00")
 @mock.patch(
-    "saleor.plugins.webhook.plugin.WebhookPlugin.get_shipping_methods_for_checkout"
+    "saleor.checkout.webhooks.list_shipping_methods.list_shipping_methods_for_checkout"
 )
-@override_settings(PLUGINS=["saleor.plugins.webhook.plugin.WebhookPlugin"])
 def test_checkout_delivery_do_not_trigger_any_webhook_calls(
     mocked_shipping_webhook_fetch,
     user_api_client,
@@ -5373,7 +5366,7 @@ def test_checkout_delivery_do_not_trigger_any_webhook_calls(
 
 
 @mock.patch(
-    "saleor.plugins.webhook.plugin.WebhookPlugin.get_shipping_methods_for_checkout"
+    "saleor.checkout.webhooks.list_shipping_methods.list_shipping_methods_for_checkout"
 )
 def test_checkout_delivery_returns_shipping_when_marked_as_invalid(
     mocked_shipping_webhook_fetch,

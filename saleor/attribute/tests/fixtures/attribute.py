@@ -2,8 +2,8 @@ import datetime
 
 import pytest
 
+from ....core.editorjs import editorjs_to_text
 from ....core.units import MeasurementUnits
-from ....core.utils.editorjs import clean_editor_js
 from ....core.utils.text import safe_truncate
 from ....tests.utils import dummy_editorjs
 from ... import AttributeEntityType, AttributeInputType, AttributeType
@@ -325,7 +325,7 @@ def rich_text_attribute(db):
     text = "Rich text attribute content."
     AttributeValue.objects.create(
         attribute=attribute,
-        name=safe_truncate(clean_editor_js(dummy_editorjs(text), to_string=True), 50),
+        name=safe_truncate(editorjs_to_text(dummy_editorjs(text)), 50),
         slug=f"instance_{attribute.id}",
         rich_text=dummy_editorjs(text),
     )
@@ -346,7 +346,7 @@ def rich_text_attribute_page_type(db):
     text = "Rich text attribute content."
     AttributeValue.objects.create(
         attribute=attribute,
-        name=safe_truncate(clean_editor_js(dummy_editorjs(text), to_string=True), 50),
+        name=safe_truncate(editorjs_to_text(dummy_editorjs(text)), 50),
         slug=f"instance_{attribute.id}",
         rich_text=dummy_editorjs(text),
     )
@@ -362,9 +362,7 @@ def rich_text_attribute_with_many_values(rich_text_attribute):
         values.append(
             AttributeValue(
                 attribute=attribute,
-                name=safe_truncate(
-                    clean_editor_js(dummy_editorjs(text), to_string=True), 50
-                ),
+                name=safe_truncate(editorjs_to_text(dummy_editorjs(text)), 50),
                 slug=f"instance_{attribute.id}_{i}",
                 rich_text=dummy_editorjs(text),
             )
@@ -895,3 +893,88 @@ def page_type_attribute_list() -> list[Attribute]:
             ]
         )
     )
+
+
+@pytest.fixture
+def customer_type_attribute_list() -> list[Attribute]:
+    return list(
+        Attribute.objects.bulk_create(
+            [
+                Attribute(slug="tier", name="Tier", type=AttributeType.CUSTOMER_TYPE),
+                Attribute(
+                    slug="customer-segment",
+                    name="Segment",
+                    type=AttributeType.CUSTOMER_TYPE,
+                ),
+                Attribute(
+                    slug="region", name="Region", type=AttributeType.CUSTOMER_TYPE
+                ),
+            ]
+        )
+    )
+
+
+@pytest.fixture
+def loyalty_customer_attribute(db):
+    attribute = Attribute.objects.create(
+        slug="loyalty-level",
+        name="Loyalty level",
+        type=AttributeType.CUSTOMER_TYPE,
+    )
+    AttributeValue.objects.create(attribute=attribute, name="Gold", slug="gold")
+    AttributeValue.objects.create(attribute=attribute, name="Silver", slug="silver")
+    return attribute
+
+
+@pytest.fixture
+def segment_customer_attribute(db):
+    attribute = Attribute.objects.create(
+        slug="segment", name="Segment", type=AttributeType.CUSTOMER_TYPE
+    )
+    AttributeValue.objects.create(attribute=attribute, name="Retail", slug="retail")
+    return attribute
+
+
+@pytest.fixture
+def description_customer_attribute(db):
+    return Attribute.objects.create(
+        slug="description",
+        name="Description",
+        type=AttributeType.CUSTOMER_TYPE,
+        input_type=AttributeInputType.PLAIN_TEXT,
+    )
+
+
+@pytest.fixture
+def hidden_customer_attribute(db):
+    return Attribute.objects.create(
+        slug="internal-score",
+        name="Internal score",
+        type=AttributeType.CUSTOMER_TYPE,
+        visible_in_storefront=False,
+    )
+
+
+@pytest.fixture
+def customer_type_page_single_reference_attribute(db):
+    return Attribute.objects.create(
+        slug="customer-single-page-reference",
+        name="Single page reference",
+        type=AttributeType.CUSTOMER_TYPE,
+        input_type=AttributeInputType.SINGLE_REFERENCE,
+        entity_type=AttributeEntityType.PAGE,
+    )
+
+
+@pytest.fixture
+def interests_customer_attribute(db):
+    attribute = Attribute.objects.create(
+        slug="interests",
+        name="Interests",
+        type=AttributeType.CUSTOMER_TYPE,
+        input_type=AttributeInputType.MULTISELECT,
+    )
+    AttributeValue.objects.create(attribute=attribute, name="Sports", slug="sports")
+    AttributeValue.objects.create(attribute=attribute, name="Music", slug="music")
+    AttributeValue.objects.create(attribute=attribute, name="Travel", slug="travel")
+    return attribute

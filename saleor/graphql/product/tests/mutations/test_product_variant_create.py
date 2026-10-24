@@ -1865,7 +1865,7 @@ def test_create_variant_with_numeric_attribute(
     assert data["attributes"][0]["attribute"]["slug"] == variant_slug
     assert (
         data["attributes"][0]["values"][0]["slug"]
-        == f"{variant_pk}_{numeric_attribute.pk}"
+        == f"productvariant-{variant_pk}_{numeric_attribute.pk}"
     )
 
     assigned_attributes = data["assignedAttributes"]
@@ -2137,7 +2137,10 @@ def test_create_variant_invalid_variant_attributes(
                     "id": size_attr_id,
                     "values": [non_existent_attr_value, size_value_slug],
                 },
-                {"id": rich_text_attr_id, "richText": json.dumps(dummy_editorjs(" "))},
+                {
+                    "id": rich_text_attr_id,
+                    "richText": json.dumps(dummy_editorjs(" "), sort_keys=True),
+                },
             ],
             "trackInventory": True,
         }
@@ -2311,7 +2314,9 @@ def test_create_variant_with_rich_text_attribute(
     assert not content["errors"]
     assert data["name"] == sku
     assert data["sku"] == sku
-    assert data["attributes"][-1]["values"][0]["richText"] == json.dumps(rich_text)
+    assert data["attributes"][-1]["values"][0]["richText"] == json.dumps(
+        rich_text, sort_keys=True
+    )
 
     assigned_attributes = data["assignedAttributes"]
     expected_assigned_attribute = {
@@ -2434,7 +2439,7 @@ def test_create_variant_with_date_attribute(
                 "dateTime": None,
                 "date": str(date_value),
                 "name": str(date_value),
-                "slug": f"{variant.id}_{date_attribute.id}",
+                "slug": f"productvariant-{variant.id}_{date_attribute.id}",
             }
         ],
     }
@@ -2504,7 +2509,7 @@ def test_create_variant_with_date_time_attribute(
                 "dateTime": date_time_value.isoformat(),
                 "date": None,
                 "name": str(date_time_value),
-                "slug": f"{variant.id}_{date_time_attribute.id}",
+                "slug": f"productvariant-{variant.id}_{date_time_attribute.id}",
             }
         ],
     }
@@ -2720,8 +2725,8 @@ def test_variant_create_product_with_variant_attributes_variant_flag_false(
     content = get_graphql_content(response)
 
     errors = content["data"]["productVariantCreate"]["errors"]
-    assert errors
-    assert errors[0]["code"] == ProductErrorCode.INVALID.name
+    # hasVariants has no more effects on variant attributes
+    assert not errors
 
 
 def test_create_product_variant_with_non_unique_external_reference(

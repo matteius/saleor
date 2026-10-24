@@ -2177,8 +2177,62 @@ def test_query_product_media_by_id_zero_size_value_original_image_returned(
     )
 
 
+def test_query_product_media_by_id_without_image_returns_thumbnail_proxy_url(
+    user_api_client, product, channel_USD
+):
+    # given
+    query = QUERY_PRODUCT_MEDIA_BY_ID
+    media = product.media.create(image=None)
+    media_id = graphene.Node.to_global_id("ProductMedia", media.pk)
+
+    variables = {
+        "productId": graphene.Node.to_global_id("Product", product.pk),
+        "mediaId": media_id,
+        "channel": channel_USD.slug,
+        "size": 120,
+    }
+
+    # when
+    response = user_api_client.post_graphql(query, variables)
+
+    # then
+    content = get_graphql_content(response)
+    assert content["data"]["product"]["mediaById"]["id"]
+    assert (
+        content["data"]["product"]["mediaById"]["url"]
+        == f"https://example.com/thumbnail/{media_id}/128/"
+    )
+
+
+def test_query_product_media_by_id_without_image_zero_size_returns_original_image_proxy_url(
+    user_api_client, product, channel_USD
+):
+    # given
+    query = QUERY_PRODUCT_MEDIA_BY_ID
+    media = product.media.create(image=None)
+    media_id = graphene.Node.to_global_id("ProductMedia", media.pk)
+
+    variables = {
+        "productId": graphene.Node.to_global_id("Product", product.pk),
+        "mediaId": media_id,
+        "channel": channel_USD.slug,
+        "size": 0,
+    }
+
+    # when
+    response = user_api_client.post_graphql(query, variables)
+
+    # then
+    content = get_graphql_content(response)
+    assert content["data"]["product"]["mediaById"]["id"]
+    assert (
+        content["data"]["product"]["mediaById"]["url"]
+        == f"https://example.com/image/{media_id}/"
+    )
+
+
 QUERY_PRODUCT_IN_FEDERATION = """
-query GetProductInFederation($representations: [_Any]) {
+query GetProductInFederation($representations: [_Any!]!) {
   _entities(representations: $representations) {
     __typename
     ... on Product {
@@ -2436,7 +2490,7 @@ def test_query_product_media_for_federation(
         ],
     }
     query = """
-      query GetProductMediaInFederation($representations: [_Any]) {
+      query GetProductMediaInFederation($representations: [_Any!]!) {
         _entities(representations: $representations) {
           __typename
           ... on ProductMedia {
@@ -3162,3 +3216,30 @@ def test_applies_limit_on_product_assigned_attributes(
         content["data"]["product"]["assignedAttributes"][0]["attribute"]["slug"]
         == first_attribute.slug
     )
+
+
+CHANNEL_FIELD_QUERY = """
+query getProduct($id: ID!) {
+    product(id: $id) {
+        id
+        channel
+    }
+}
+"""
+
+
+def test_channel_field_with_default_channel_anonymous(api_client, product, channel_USD):
+    """No `channel` argument is passed and the anonymous requestor has no product permissions, so the resolver falls back to the lazy default channel slug."""
+
+    # given
+    product_id = graphene.Node.to_global_id("Product", product.pk)
+    variables = {"id": product_id}
+
+    # when
+    response = api_client.post_graphql(CHANNEL_FIELD_QUERY, variables)
+
+    # then
+    content = get_graphql_content(response)
+    data = content["data"]["product"]
+    assert data["id"] == product_id
+    assert data["channel"] == channel_USD.slug

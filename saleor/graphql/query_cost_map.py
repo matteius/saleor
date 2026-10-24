@@ -75,8 +75,8 @@ COST_MAP = {
         "collection": {"complexity": 1},
         "collections": {"complexity": 1, "multipliers": ["first", "last"]},
         "customers": {"complexity": 1, "multipliers": ["first", "last"]},
-        "digitalContent": {"complexity": 1},
-        "digitalContents": {"complexity": 1, "multipliers": ["first", "last"]},
+        "customerType": {"complexity": 1},
+        "customerTypes": {"complexity": 1, "multipliers": ["first", "last"]},
         "draftOrders": {"complexity": 1, "multipliers": ["first", "last"]},
         "exportFile": {"complexity": 1},
         "exportFiles": {"complexity": 1, "multipliers": ["first", "last"]},
@@ -138,6 +138,7 @@ COST_MAP = {
     },
     "App": {
         "extensions": {"complexity": 1},
+        "problems": {"complexity": 1, "multipliers": ["limit"]},
         "tokens": {"complexity": 1},
         "webhooks": {"complexity": 1},
     },
@@ -259,6 +260,10 @@ COST_MAP = {
     },
     "CollectionChannelListing": {
         "channel": {"complexity": 1},
+    },
+    "CustomerType": {
+        "attributes": {"complexity": 1},
+        "availableAttributes": {"complexity": 1, "multipliers": ["first", "last"]},
     },
     "Fulfillment": {
         "lines": {"complexity": 1},
@@ -423,8 +428,11 @@ COST_MAP = {
         "countries": {"complexity": 1},
     },
     "User": {
+        "assignedAttribute": {"complexity": 1},
+        "assignedAttributes": {"complexity": 1, "multipliers": ["limit"]},
         "avatar": {"complexity": 1},
         "checkout": {"complexity": 1},
+        "customerType": {"complexity": 1},
         "editableGroups": {"complexity": 1},
         "events": {"complexity": 1},
         "giftCards": {"complexity": 1, "multipliers": ["first", "last"]},

@@ -1,12 +1,13 @@
 import datetime
-import json
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, NamedTuple, cast
+from typing import TYPE_CHECKING, NamedTuple
 
+import orjson
 from django.db.models import Model
 from django.db.models.expressions import Exists, OuterRef
 
+from ....account import models as account_models
 from ....attribute import AttributeEntityType, AttributeInputType
 from ....attribute import models as attribute_models
 from ....page import models as page_models
@@ -16,7 +17,12 @@ from ..enums import AttributeValueBulkActionEnum
 if TYPE_CHECKING:
     from ....attribute.models import Attribute
 
-T_INSTANCE = product_models.Product | product_models.ProductVariant | page_models.Page
+T_INSTANCE = (
+    product_models.Product
+    | product_models.ProductVariant
+    | page_models.Page
+    | account_models.User
+)
 T_ERROR_DICT = dict[tuple[str, str], list]
 T_REFERENCE = (
     product_models.Product
@@ -34,6 +40,7 @@ class AssignedAttributeData:
     product_id: int | None = None
     page_id: int | None = None
     variant_id: int | None = None
+    user_id: int | None = None
 
 
 @dataclass
@@ -96,8 +103,38 @@ def get_assignment_model_and_fk(instance: T_INSTANCE):
         return attribute_models.AssignedPageAttributeValue, "page_id"
     if isinstance(instance, product_models.Product):
         return attribute_models.AssignedProductAttributeValue, "product_id"
+    if isinstance(instance, account_models.User):
+        return attribute_models.AssignedUserAttributeValue, "user_id"
     raise NotImplementedError(
         f"Assignment for {type(instance).__name__} not implemented."
+    )
+
+
+def get_assigned_attribute_values_qs(instance: T_INSTANCE, attribute_ids: list[int]):
+    """Build a queryset of values currently assigned to the given instance."""
+    if isinstance(instance, product_models.ProductVariant):
+        # variant has old attribute structure so need to handle it differently
+        attribute_variant = Exists(
+            attribute_models.AttributeVariant.objects.filter(
+                pk=OuterRef("assignment_id"),
+                attribute_id__in=attribute_ids,
+            )
+        )
+        assigned_variant = Exists(
+            attribute_models.AssignedVariantAttribute.objects.filter(
+                attribute_variant
+            ).filter(
+                variant_id=instance.pk,
+                values=OuterRef("pk"),
+            )
+        )
+        return attribute_models.AttributeValue.objects.filter(assigned_variant)
+
+    assignment_model, instance_fk = get_assignment_model_and_fk(instance)
+    assigned_values = assignment_model.objects.filter(**{instance_fk: instance.pk})
+    return attribute_models.AttributeValue.objects.filter(
+        Exists(assigned_values.filter(value_id=OuterRef("id"))),
+        attribute_id__in=attribute_ids,
     )
 
 
@@ -105,42 +142,21 @@ def get_assigned_attribute_value_if_exists(
     instance: T_INSTANCE, attribute: "Attribute", lookup_field: str, value
 ):
     """Unified method to find an existing assigned value."""
-    if isinstance(instance, product_models.ProductVariant):
-        # variant has old attribute structure so need to handle it differently
-        return get_variant_assigned_attribute_value_if_exists(
-            instance, attribute, lookup_field, value
-        )
-
-    assignment_model, instance_fk = get_assignment_model_and_fk(instance)
-    assigned_values = assignment_model.objects.filter(**{instance_fk: instance.pk})
-    return attribute_models.AttributeValue.objects.filter(
-        Exists(assigned_values.filter(value_id=OuterRef("id"))),
-        attribute_id=attribute.pk,
-        **{lookup_field: value},
-    ).first()
-
-
-def get_variant_assigned_attribute_value_if_exists(
-    instance: T_INSTANCE, attribute: "Attribute", lookup_field: str, value: str
-):
-    variant = cast(product_models.ProductVariant, instance)
-    attribute_variant = Exists(
-        attribute_models.AttributeVariant.objects.filter(
-            pk=OuterRef("assignment_id"),
-            attribute_id=attribute.pk,
-        )
+    return (
+        get_assigned_attribute_values_qs(instance, [attribute.pk])
+        .filter(**{lookup_field: value})
+        .first()
     )
-    assigned_variant = Exists(
-        attribute_models.AssignedVariantAttribute.objects.filter(
-            attribute_variant
-        ).filter(
-            variant_id=variant.pk,
-            values=OuterRef("pk"),
-        )
-    )
-    return attribute_models.AttributeValue.objects.filter(
-        assigned_variant, **{lookup_field: value}
-    ).first()
+
+
+def get_assigned_attribute_values_map(
+    instance: T_INSTANCE, attribute_ids: list[int]
+) -> dict[int, attribute_models.AttributeValue]:
+    """Map attribute id to the value currently assigned to the instance."""
+    values_map: dict[int, attribute_models.AttributeValue] = {}
+    for value in get_assigned_attribute_values_qs(instance, attribute_ids):
+        values_map.setdefault(value.attribute_id, value)
+    return values_map
 
 
 def has_input_modified_attribute_values(
@@ -186,7 +202,11 @@ def get_attribute_to_values_map_for_variant(
             if attribute.input_type == AttributeInputType.PLAIN_TEXT:
                 attribute_values[attribute_id].append(attr_value.plain_text)
             elif attribute.input_type == AttributeInputType.RICH_TEXT:
-                attribute_values[attribute_id].append(json.dumps(attr_value.rich_text))
+                attribute_values[attribute_id].append(
+                    orjson.dumps(attr_value.rich_text, option=orjson.OPT_UTC_Z).decode(
+                        "utf-8"
+                    )
+                )
             elif attribute.input_type == AttributeInputType.NUMERIC:
                 attribute_values[attribute_id].append(str(attr_value.numeric))
             elif attribute.input_type in [
@@ -206,7 +226,10 @@ def get_values_from_pre_save_bulk_data(
 ) -> dict[int, list[str | None | datetime.datetime]]:
     input_type_to_field_and_action = {
         AttributeInputType.PLAIN_TEXT: ("plain_text", None),
-        AttributeInputType.RICH_TEXT: ("rich_text", json.dumps),
+        AttributeInputType.RICH_TEXT: (
+            "rich_text",
+            lambda x: orjson.dumps(x, option=orjson.OPT_UTC_Z).decode("utf-8"),
+        ),
         AttributeInputType.NUMERIC: ("numeric", str),
         AttributeInputType.DATE: ("date_time", None),
         AttributeInputType.DATE_TIME: ("date_time", None),

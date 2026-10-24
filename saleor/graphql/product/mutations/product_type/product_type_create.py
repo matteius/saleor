@@ -26,6 +26,9 @@ class ProductTypeInput(BaseInputObjectType):
             "Determines if product of this type has multiple variants. This option "
             "mainly simplifies product management in the dashboard. There is always at "
             "least one variant created under the hood."
+            f"{DEPRECATED_IN_3X_INPUT} The field has no effect on the API behavior. "
+            "This is a leftover from the past Simple/Configurable product distinction. "
+            "Products can have multiple variants regardless of this setting. "
         )
     )
     product_attributes = NonNullList(
@@ -45,7 +48,14 @@ class ProductTypeInput(BaseInputObjectType):
         description="Determines if shipping is required for products of this variant."
     )
     is_digital = graphene.Boolean(
-        description="Determines if products are digital.", required=False
+        description=(
+            "Determines if products are digital - doesn't have any effect, "
+            "it's present for backward-compatibility."
+        ),
+        deprecation_reason=(
+            "Will be removed in v3.24.0, use metadata or attributes instead."
+        ),
+        required=False,
     )
     weight = WeightScalar(description="Weight of the ProductType items.")
     tax_code = graphene.String(

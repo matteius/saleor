@@ -22,6 +22,7 @@ from ...utils import ERROR_COULD_NO_RESOLVE_GLOBAL_ID
 from ..types import Checkout
 from .checkout_lines_add import CheckoutLinesAdd
 from .utils import (
+    PRICE_OVERRIDE_REASON_INPUT_DESCRIPTION,
     CheckoutLineData,
     check_lines_quantity,
     get_variants_and_total_quantities,
@@ -50,6 +51,10 @@ class CheckoutLineUpdateInput(BaseInputObjectType):
             "with `HANDLE_CHECKOUTS` permission. When the line with the same variant "
             "will be provided multiple times, the last price will be used."
         ),
+    )
+    price_override_reason = graphene.String(
+        required=False,
+        description=PRICE_OVERRIDE_REASON_INPUT_DESCRIPTION,
     )
     line_id = graphene.ID(
         description="ID of the line.",
@@ -134,6 +139,7 @@ class CheckoutLinesUpdate(CheckoutLinesAdd):
             existing_lines=lines,
             replace=True,
             check_reservations=is_reservation_enabled(site.settings),
+            calculate_stocks_with_shipping_zones=site.settings.use_legacy_shipping_zone_stock_availability,
         )
 
     @classmethod
@@ -231,6 +237,12 @@ class CheckoutLinesUpdate(CheckoutLinesAdd):
             token=token,
             id=id,
         )
+
+    @classmethod
+    def mark_search_vectors_as_dirty(cls, checkout, update_fields):
+        # As any changes applied with `CheckoutLinesUpdate` do not influence the
+        # checkout search vector, we don't mark it as dirty.
+        pass
 
     @classmethod
     def _get_variants_from_lines_input(cls, lines: list[dict]) -> list[ProductVariant]:

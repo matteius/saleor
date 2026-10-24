@@ -1107,6 +1107,37 @@ def test_checkout_create_no_channel_shipping_zones(
     assert errors[0]["field"] == "quantity"
 
 
+def test_checkout_create_no_channel_shipping_zones_excluded_from_stock_calculations(
+    api_client, stock, graphql_address_data, channel_USD, site_settings
+):
+    # given
+    site_settings.use_legacy_shipping_zone_stock_availability = False
+    site_settings.save(update_fields=["use_legacy_shipping_zone_stock_availability"])
+
+    channel_USD.shipping_zones.clear()
+    variant = stock.product_variant
+    variant_id = graphene.Node.to_global_id("ProductVariant", variant.id)
+    test_email = "test@example.com"
+    shipping_address = graphql_address_data
+    variables = {
+        "checkoutInput": {
+            "channel": channel_USD.slug,
+            "lines": [{"quantity": 1, "variantId": variant_id}],
+            "email": test_email,
+            "shippingAddress": shipping_address,
+        }
+    }
+
+    # when
+    response = api_client.post_graphql(MUTATION_CHECKOUT_CREATE, variables)
+    content = get_graphql_content(response)["data"]["checkoutCreate"]
+
+    # then - no INSUFFICIENT_STOCK error when flag is disabled
+    errors = content["errors"]
+    assert not errors
+    assert content["checkout"]
+
+
 def test_checkout_create_multiple_warehouse(
     api_client, variant_with_many_stocks, graphql_address_data, channel_USD
 ):
@@ -2754,6 +2785,7 @@ MUTATION_CHECKOUT_CREATE_WITH_ONLY_ID = """
     "saleor.webhook.transport.asynchronous.transport.generate_deferred_payloads.apply_async"
 )
 @override_settings(PLUGINS=["saleor.plugins.webhook.plugin.WebhookPlugin"])
+@override_settings(WEBHOOK_DEFERRED_PAYLOAD_QUEUE_NAME="deferred_queue")
 def test_checkout_create_triggers_webhooks(
     mocked_generate_deferred_payloads,
     mocked_send_webhook_request_async,
@@ -2817,10 +2849,12 @@ def test_checkout_create_triggers_webhooks(
                 "requestor_model_name": None,
                 "requestor_object_id": None,
                 "request_time": None,
+                "subscribable_object_data": None,
             },
             "send_webhook_queue": settings.CHECKOUT_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             "telemetry_context": ANY,
         },
+        queue=settings.WEBHOOK_DEFERRED_PAYLOAD_QUEUE_NAME,
         MessageGroupId="example.com",
     )
 

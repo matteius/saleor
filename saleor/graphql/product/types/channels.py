@@ -21,7 +21,11 @@ from ....tax.utils import (
 from ...account import types as account_types
 from ...channel.dataloaders.by_self import ChannelByIdLoader
 from ...channel.types import Channel
-from ...core.descriptions import ADDED_IN_321
+from ...core.descriptions import (
+    ADDED_IN_321,
+    DEPRECATED_PREORDER,
+    DEPRECATED_PREORDER_TYPE_DESCRIPTION,
+)
 from ...core.doc_category import DOC_CATEGORY_PRODUCTS
 from ...core.fields import PermissionsField
 from ...core.scalars import Date, DateTime
@@ -144,9 +148,8 @@ class ProductChannelListing(ModelObjectType[models.ProductChannelListing]):
             if not existing_listings:
                 return None
 
-            has_variants = True
             purchase_cost, _margin = get_product_costs_data(
-                existing_listings, has_variants, root.currency
+                existing_listings, root.currency
             )
             return purchase_cost
 
@@ -172,9 +175,8 @@ class ProductChannelListing(ModelObjectType[models.ProductChannelListing]):
             if not existing_listings:
                 return None
 
-            has_variants = True
             _purchase_cost, margin = get_product_costs_data(
-                existing_listings, has_variants, root.currency
+                existing_listings, root.currency
             )
             return Margin(margin[0], margin[1])
 
@@ -296,15 +298,20 @@ class PreorderThreshold(BaseObjectType):
     quantity = graphene.Int(
         required=False,
         description="Preorder threshold for product variant in this channel.",
+        deprecation_reason=DEPRECATED_PREORDER,
     )
     sold_units = graphene.Int(
         required=True,
         description="Number of sold product variant in this channel.",
+        deprecation_reason=DEPRECATED_PREORDER,
     )
 
     class Meta:
         doc_category = DOC_CATEGORY_PRODUCTS
-        description = "Represents preorder variant data for channel."
+        description = (
+            "Represents preorder variant data for channel."
+            + DEPRECATED_PREORDER_TYPE_DESCRIPTION
+        )
 
 
 class ProductVariantChannelListing(
@@ -336,6 +343,7 @@ class ProductVariantChannelListing(
         PreorderThreshold,
         required=False,
         description="Preorder variant data.",
+        deprecation_reason=DEPRECATED_PREORDER,
     )
 
     class Meta:

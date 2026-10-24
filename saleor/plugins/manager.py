@@ -49,11 +49,11 @@ from ..payment.interface import (
     TransactionSessionResult,
 )
 from ..tax.utils import calculate_tax_rate
-from .base_plugin import ExcludedShippingMethod, ExternalAccessTokens
+from .base_plugin import ExternalAccessTokens
 from .models import PluginConfiguration
 
 if TYPE_CHECKING:
-    from ..account.models import Address, Group, User
+    from ..account.models import Address, CustomerType, Group, User
     from ..app.models import App
     from ..attribute.models import Attribute, AttributeValue
     from ..checkout.fetch import CheckoutInfo, CheckoutLineInfo
@@ -76,12 +76,11 @@ if TYPE_CHECKING:
         ProductType,
         ProductVariant,
     )
-    from ..shipping.interface import ShippingMethodData
     from ..shipping.models import ShippingMethod, ShippingZone
     from ..site.models import SiteSettings
     from ..tax.models import TaxClass
     from ..thumbnail.models import Thumbnail
-    from ..warehouse.models import Stock, Warehouse
+    from ..warehouse.models import Warehouse
     from .base_plugin import BasePlugin
 
 NotifyEventTypeChoice = str
@@ -630,36 +629,6 @@ class PluginsManager(PaymentInterface):
             or default_value
         )
 
-    # Note: this method is deprecated and will be removed in a future release.
-    # Webhook-related functionality will be moved from plugin to core modules.
-    def get_taxes_for_checkout(
-        self,
-        checkout_info,
-        lines,
-        app_identifier,
-        pregenerated_subscription_payloads: dict | None = None,
-    ) -> TaxData | None:
-        if pregenerated_subscription_payloads is None:
-            pregenerated_subscription_payloads = {}
-        return self.__run_tax_method_until_first_success(
-            "get_taxes_for_checkout",
-            checkout_info,
-            lines,
-            app_identifier,
-            pregenerated_subscription_payloads=pregenerated_subscription_payloads,
-            channel_slug=checkout_info.channel.slug,
-        )
-
-    # Note: this method is deprecated and will be removed in a future release.
-    # Webhook-related functionality will be moved from plugin to core modules.
-    def get_taxes_for_order(self, order: "Order", app_identifier) -> TaxData | None:
-        return self.__run_tax_method_until_first_success(
-            "get_taxes_for_order",
-            order,
-            app_identifier,
-            channel_slug=order.channel.slug,
-        )
-
     def __run_tax_method_until_first_success(
         self,
         method_name: str,
@@ -741,6 +710,28 @@ class PluginsManager(PaymentInterface):
             "customer_metadata_updated",
             default_value,
             customer,
+            webhooks=webhooks,
+            channel_slug=None,
+        )
+
+    def customer_type_created(self, customer_type: "CustomerType"):
+        default_value = None
+        return self.__run_method_on_plugins(
+            "customer_type_created", default_value, customer_type, channel_slug=None
+        )
+
+    def customer_type_updated(self, customer_type: "CustomerType"):
+        default_value = None
+        return self.__run_method_on_plugins(
+            "customer_type_updated", default_value, customer_type, channel_slug=None
+        )
+
+    def customer_type_deleted(self, customer_type: "CustomerType", webhooks=None):
+        default_value = None
+        return self.__run_method_on_plugins(
+            "customer_type_deleted",
+            default_value,
+            customer_type,
             webhooks=webhooks,
             channel_slug=None,
         )
@@ -877,6 +868,18 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
+    def product_variant_discounted_price_updated(
+        self, variant_price_info, webhooks=None
+    ):
+        default_value = None
+        return self.__run_method_on_plugins(
+            "product_variant_discounted_price_updated",
+            default_value,
+            variant_price_info,
+            webhooks=webhooks,
+            channel_slug=None,
+        )
+
     # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def product_variant_deleted(self, product_variant: "ProductVariant", webhooks=None):
@@ -885,42 +888,6 @@ class PluginsManager(PaymentInterface):
             "product_variant_deleted",
             default_value,
             product_variant,
-            webhooks=webhooks,
-            channel_slug=None,
-        )
-
-    # Note: this method is deprecated and will be removed in a future release.
-    # Webhook-related functionality will be moved from plugin to core modules.
-    def product_variant_out_of_stock(self, stock: "Stock", webhooks=None):
-        default_value = None
-        self.__run_method_on_plugins(
-            "product_variant_out_of_stock",
-            default_value,
-            stock,
-            webhooks=webhooks,
-            channel_slug=None,
-        )
-
-    # Note: this method is deprecated and will be removed in a future release.
-    # Webhook-related functionality will be moved from plugin to core modules.
-    def product_variant_back_in_stock(self, stock: "Stock", webhooks=None):
-        default_value = None
-        self.__run_method_on_plugins(
-            "product_variant_back_in_stock",
-            default_value,
-            stock,
-            webhooks=webhooks,
-            channel_slug=None,
-        )
-
-    # Note: this method is deprecated and will be removed in a future release.
-    # Webhook-related functionality will be moved from plugin to core modules.
-    def product_variant_stocks_updated(self, stocks: list["Stock"], webhooks=None):
-        default_value = None
-        self.__run_method_on_plugins(
-            "product_variant_stocks_updated",
-            default_value,
-            stocks,
             webhooks=webhooks,
             channel_slug=None,
         )
@@ -1286,7 +1253,10 @@ class PluginsManager(PaymentInterface):
     # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def fulfillment_created(
-        self, fulfillment: "Fulfillment", notify_customer: bool | None = True
+        self,
+        fulfillment: "Fulfillment",
+        notify_customer: bool | None = True,
+        calculate_stocks_with_shipping_zones: bool = True,
     ):
         default_value = None
         return self.__run_method_on_plugins(
@@ -1295,23 +1265,32 @@ class PluginsManager(PaymentInterface):
             fulfillment,
             channel_slug=fulfillment.order.channel.slug,
             notify_customer=notify_customer,
+            calculate_stocks_with_shipping_zones=calculate_stocks_with_shipping_zones,
         )
 
     # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
-    def fulfillment_canceled(self, fulfillment: "Fulfillment"):
+    def fulfillment_canceled(
+        self,
+        fulfillment: "Fulfillment",
+        calculate_stocks_with_shipping_zones: bool = True,
+    ):
         default_value = None
         return self.__run_method_on_plugins(
             "fulfillment_canceled",
             default_value,
             fulfillment,
             channel_slug=fulfillment.order.channel.slug,
+            calculate_stocks_with_shipping_zones=calculate_stocks_with_shipping_zones,
         )
 
     # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def fulfillment_approved(
-        self, fulfillment: "Fulfillment", notify_customer: bool | None = True
+        self,
+        fulfillment: "Fulfillment",
+        notify_customer: bool | None = True,
+        calculate_stocks_with_shipping_zones: bool = True,
     ):
         default_value = None
         return self.__run_method_on_plugins(
@@ -1320,6 +1299,7 @@ class PluginsManager(PaymentInterface):
             fulfillment,
             channel_slug=fulfillment.order.channel.slug,
             notify_customer=notify_customer,
+            calculate_stocks_with_shipping_zones=calculate_stocks_with_shipping_zones,
         )
 
     # Note: this method is deprecated and will be removed in a future release.
@@ -2586,36 +2566,6 @@ class PluginsManager(PaymentInterface):
             )
         return gateways
 
-    def list_shipping_methods_for_checkout(
-        self,
-        checkout: "Checkout",
-        built_in_shipping_methods: list["ShippingMethodData"],
-        channel_slug: str | None = None,
-        active_only: bool = True,
-    ) -> list["ShippingMethodData"]:
-        channel_slug = channel_slug if channel_slug else checkout.channel.slug
-        plugins = self.get_plugins(channel_slug=channel_slug, active_only=active_only)
-        shipping_plugins = [
-            plugin
-            for plugin in plugins
-            if hasattr(plugin, "get_shipping_methods_for_checkout")
-        ]
-
-        shipping_methods = []
-        for plugin in shipping_plugins:
-            shipping_methods.extend(
-                # https://github.com/python/mypy/issues/9975
-                getattr(plugin, "get_shipping_methods_for_checkout")(
-                    checkout, built_in_shipping_methods, None
-                )
-            )
-        return list(
-            filter(
-                lambda method: method.price.currency == checkout.currency,
-                shipping_methods,
-            )
-        )
-
     def list_external_authentications(self, active_only: bool = True) -> list[dict]:
         auth_basic_method = "external_obtain_access_tokens"
         plugins = self.get_plugins(active_only=active_only)
@@ -2873,46 +2823,6 @@ class PluginsManager(PaymentInterface):
         plugin = self.get_plugin(plugin_id)
         return self.__run_method_on_single_plugin(
             plugin, "external_verify", default_value, data, request
-        )
-
-    def excluded_shipping_methods_for_order(
-        self,
-        order: "Order",
-        available_shipping_methods: list["ShippingMethodData"],
-    ) -> list[ExcludedShippingMethod]:
-        default_value: list[ExcludedShippingMethod] = []
-
-        if not available_shipping_methods:
-            return default_value
-
-        return self.__run_method_on_plugins(
-            "excluded_shipping_methods_for_order",
-            default_value,
-            order,
-            available_shipping_methods,
-            channel_slug=order.channel.slug,
-        )
-
-    def excluded_shipping_methods_for_checkout(
-        self,
-        checkout: "Checkout",
-        channel: "Channel",
-        available_shipping_methods: list["ShippingMethodData"],
-        pregenerated_subscription_payloads: dict | None = None,
-    ) -> list[ExcludedShippingMethod]:
-        default_value: list[ExcludedShippingMethod] = []
-
-        if not available_shipping_methods:
-            return default_value
-        if pregenerated_subscription_payloads is None:
-            pregenerated_subscription_payloads = {}
-        return self.__run_method_on_plugins(
-            "excluded_shipping_methods_for_checkout",
-            default_value,
-            checkout,
-            available_shipping_methods,
-            pregenerated_subscription_payloads=pregenerated_subscription_payloads,
-            channel_slug=channel.slug,
         )
 
     def is_event_active_for_any_plugin(

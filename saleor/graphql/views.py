@@ -1,13 +1,16 @@
+import decimal
 import hashlib
 import importlib
-import json
+import time
 from inspect import isclass
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urljoin
 
+import orjson
 from django.conf import settings
 from django.core.cache import cache
-from django.http import HttpRequest, HttpResponseNotAllowed, JsonResponse
+from django.core.exceptions import RequestDataTooBig
+from django.http import HttpRequest, HttpResponse, HttpResponseNotAllowed
 from django.shortcuts import render
 from django.views.generic import View
 from graphql import GraphQLBackend, GraphQLDocument, GraphQLSchema
@@ -31,11 +34,13 @@ from .. import __version__ as saleor_version
 from ..core.exceptions import PermissionDenied
 from ..core.telemetry import Scope, SpanKind, saleor_attributes, tracer
 from ..webhook import observability
+from . import GraphQLOperationResult
 from .api import API_PATH, schema
 from .context import clear_context, get_context_value
-from .core.validators.query_cost import validate_query_cost
+from .core.validators import validate_query
 from .error import clear_errors
 from .metrics import (
+    record_graphql_batch_size,
     record_graphql_query_cost,
     record_graphql_query_count,
     record_graphql_query_duration,
@@ -43,6 +48,11 @@ from .metrics import (
     record_request_duration,
 )
 from .query_cost_map import COST_MAP, QUERY_COST_FAILED_OPERATION
+from .storefront_traffic import (
+    STOREFRONT_TRAFFIC_ERROR_CODE,
+    STOREFRONT_TRAFFIC_ERROR_MESSAGE,
+    is_storefront_traffic_blocked,
+)
 from .utils import (
     format_error,
     get_source_service_name_value,
@@ -52,6 +62,43 @@ from .utils import (
 from .utils.validators import check_if_query_contains_only_schema
 
 INT_ERROR_MSG = "Int cannot represent non 32-bit signed integer value"
+
+# Sentinel result returned by `execute_graphql_request` when a request is rejected
+# as disallowed storefront traffic. `get_response` matches it by identity and maps
+# it to a 401 without running it through `format_error` (which would relocate and
+# annotate the error and log it as a failed query).
+STOREFRONT_TRAFFIC_BLOCKED = ExecutionResult(invalid=True)
+STOREFRONT_TRAFFIC_BLOCKED_RESPONSE: GraphQLOperationResult = {
+    "errors": [
+        {
+            "message": STOREFRONT_TRAFFIC_ERROR_MESSAGE,
+            "extensions": {"code": STOREFRONT_TRAFFIC_ERROR_CODE},
+        }
+    ]
+}
+
+
+def default_serializer(obj):
+    if isinstance(obj, decimal.Decimal):
+        return str(obj)
+    raise TypeError
+
+
+class JsonResponse(HttpResponse):
+    def __init__(
+        self,
+        data,
+        safe=True,
+        **kwargs,
+    ):
+        if safe and not isinstance(data, dict):
+            raise TypeError(
+                "In order to allow non-dict objects to be serialized set the "
+                "safe parameter to False."
+            )
+        kwargs.setdefault("content_type", "application/json")
+        data = orjson.dumps(data, option=orjson.OPT_UTC_Z, default=default_serializer)
+        super().__init__(content=data, **kwargs)
 
 
 class GraphQLView(View):
@@ -144,21 +191,54 @@ class GraphQLView(View):
     def _handle_query(self, request: HttpRequest) -> JsonResponse:
         try:
             data = self.parse_body(request)
+        except RequestDataTooBig:
+            return JsonResponse(
+                data={
+                    "errors": [
+                        self.format_error(
+                            GraphQLError("Request body exceeds maximum size.")
+                        )
+                    ]
+                },
+                status=413,
+            )
         except ValueError:
             return JsonResponse(
-                data={"errors": [self.format_error("Unable to parse query.")]},
+                data={
+                    "errors": [
+                        self.format_error(GraphQLError("Unable to parse query."))
+                    ]
+                },
                 status=400,
             )
 
+        result: GraphQLOperationResult | None | list[GraphQLOperationResult | None]
         if isinstance(data, list):
+            batch_size = len(data)
+            if batch_size > settings.GRAPHQL_BATCH_MAX_COUNT:
+                return JsonResponse(
+                    data={
+                        "errors": [
+                            self.format_error(
+                                GraphQLError("Number of batch queries exceeded.")
+                            )
+                        ]
+                    },
+                    status=400,
+                )
+            # We only want to record successful requests
+            if batch_size > 1:
+                record_graphql_batch_size(batch_size)
+
             responses = [self.get_response(request, entry) for entry in data]
-            result: list | dict | None = [response for response, code in responses]
+            result = [response for response, code in responses]
             status_code = max((code for response, code in responses), default=200)
         else:
             result, status_code = self.get_response(request, data)
         return JsonResponse(data=result, status=status_code, safe=False)
 
     def handle_query(self, request: HttpRequest) -> JsonResponse:
+        request_start_time = time.monotonic()
         with (
             tracer.extract_context(request.headers) as context,
             tracer.start_as_current_span(
@@ -208,34 +288,48 @@ class GraphQLView(View):
             with observability.report_api_call(request) as api_call:
                 api_call.response = response
                 api_call.report()
+
+            request_duration = time.monotonic() - request_start_time
+
+            if request_duration > settings.GRAPHQL_SPANS_MARK_SLOW_AFTER:
+                error_description = f"Slow request. Exceeded time limit of {settings.GRAPHQL_SPANS_MARK_SLOW_AFTER} seconds."
+                error = RuntimeError(error_description)
+                # We want to mark this span as an error to indicate that the user may
+                # have received an HTTP 504 or a poor experience. This increases the
+                # chance of the trace being retained as it is less likely to be dropped
+                # by sampling.
+                span.set_status(status=StatusCode.ERROR, description=error_description)
+                span.record_exception(error)
             return response
 
     def get_response(
         self, request: HttpRequest, data: dict
-    ) -> tuple[dict[str, list[Any]] | None, int]:
+    ) -> tuple[GraphQLOperationResult | None, int]:
         with observability.report_gql_operation() as operation:
             execution_result = self.execute_graphql_request(request, data)
+            # The request was rejected as disallowed storefront traffic, so the query
+            # was never executed and there is no result to format. Return the canned
+            # error with a 401 and skip the `format_error` / observability handling
+            # below, which is meant for real execution failures.
+            if execution_result is STOREFRONT_TRAFFIC_BLOCKED:
+                return STOREFRONT_TRAFFIC_BLOCKED_RESPONSE, 401
             status_code = 200
-            if execution_result:
-                response = {}
-                if execution_result.errors:
-                    response["errors"] = [
-                        self.format_error(e) for e in execution_result.errors
-                    ]
-                    # Error handling form `GraphQL-Core-Legacy` creates a multiple references cycles in
-                    # the error object. We need to clear them.
-                    clear_errors(execution_result.errors)
-                if execution_result.invalid:
-                    status_code = 400
-                else:
-                    response["data"] = execution_result.data
-                if execution_result.extensions:
-                    response["extensions"] = execution_result.extensions
-                result: dict[str, list[Any]] | None = response
+            result: GraphQLOperationResult = {}
+            if execution_result.errors:
+                result["errors"] = [
+                    self.format_error(e) for e in execution_result.errors
+                ]
+                # Error handling form `GraphQL-Core-Legacy` creates a multiple references cycles in
+                # the error object. We need to clear them.
+                clear_errors(execution_result.errors)
+            if execution_result.invalid:
+                status_code = 400
             else:
-                result = None
-            operation.result = result
+                result["data"] = execution_result.data
+            if execution_result.extensions:
+                result["extensions"] = execution_result.extensions
             operation.result_invalid = execution_result.invalid
+            operation.result = dict(result)
         return result, status_code
 
     def get_root_value(self):
@@ -243,7 +337,7 @@ class GraphQLView(View):
 
     def parse_query(
         self, query: str | None
-    ) -> tuple[GraphQLDocument | None, ExecutionResult | None]:
+    ) -> tuple[GraphQLDocument, None] | tuple[None, ExecutionResult]:
         """Attempt to parse a query (mandatory) to a gql document object.
 
         If no query was given or query is not a string, it returns an error.
@@ -267,7 +361,9 @@ class GraphQLView(View):
         except (ValueError, GraphQLSyntaxError) as e:
             return None, ExecutionResult(errors=[e], invalid=True)
 
-    def execute_graphql_request(self, request: HttpRequest, data: dict):
+    def execute_graphql_request(
+        self, request: HttpRequest, data: dict
+    ) -> ExecutionResult:
         with (
             tracer.start_as_current_span(
                 "GraphQL Operation", scope=Scope.SERVICE
@@ -285,7 +381,7 @@ class GraphQLView(View):
                 operation.name = operation_name
                 operation.variables = variables
 
-            if error or document is None:
+            if error:
                 error_description = self.format_span_error_description(error)
                 error_type = (
                     error.errors[0].__class__.__name__
@@ -300,6 +396,7 @@ class GraphQLView(View):
                     )
                     query_duration_attrs[error_attributes.ERROR_TYPE] = error_type
                 return error
+            document = cast(GraphQLDocument, document)
 
             try:
                 query_contains_schema = check_if_query_contains_only_schema(document)
@@ -354,12 +451,35 @@ class GraphQLView(View):
                     saleor_attributes.SALEOR_SOURCE_SERVICE_NAME, source_service_name
                 )
 
-            query_cost, cost_errors = validate_query_cost(
-                schema,
-                document,
-                variables,
-                COST_MAP,
-                settings.GRAPHQL_QUERY_MAX_COMPLEXITY,
+            if operation_type == "subscription":
+                # The schema exposes a `Subscription` type only so apps can define
+                # webhook subscription documents. The synchronous executor used here
+                # cannot run them and raises a bare `Exception`, which surfaces as an
+                # unhandled error. Reject with a proper GraphQL error instead.
+                subscription_error = GraphQLError(
+                    "Subscriptions are supported only as webhooks. See "
+                    "https://docs.saleor.io/developer/extending/webhooks/overview"
+                )
+                span.set_status(
+                    status=StatusCode.ERROR, description=str(subscription_error)
+                )
+                error_type = subscription_error.__class__.__name__
+                record_graphql_query_count(
+                    operation_type=operation_type, error_type=error_type
+                )
+                record_graphql_query_cost(
+                    QUERY_COST_FAILED_OPERATION,
+                    operation_type=operation_type,
+                    error_type=error_type,
+                )
+                query_duration_attrs[error_attributes.ERROR_TYPE] = error_type
+                return ExecutionResult(errors=[subscription_error], invalid=True)
+
+            query_cost, cost_errors = validate_query(
+                schema=schema,
+                document_ast=document.document_ast,
+                variables=variables,
+                cost_map=COST_MAP,
             )
             span.set_attribute(saleor_attributes.GRAPHQL_OPERATION_COST, query_cost)
 
@@ -392,6 +512,13 @@ class GraphQLView(View):
                 span.set_attribute(saleor_attributes.SALEOR_APP_NAME, app.name)
 
             try:
+                # Reject disallowed storefront traffic before executing. App and
+                # staff-user requests are always allowed; anonymous and customer
+                # requests follow the cached shop setting. Checked here so it reuses
+                # the single context created above (cleaned by the `finally`) rather
+                # than building and tearing down a second one.
+                if is_storefront_traffic_blocked(context):
+                    return STOREFRONT_TRAFFIC_BLOCKED
                 response = None
                 error_type = None
                 should_use_cache_for_scheme = query_contains_schema & (
@@ -461,8 +588,11 @@ class GraphQLView(View):
         if content_type == "application/graphql":
             return {"query": request.body.decode("utf-8")}
         if content_type == "application/json":
-            body = request.body.decode("utf-8")
-            return json.loads(body)
+            body = orjson.loads(request.body)
+            if isinstance(body, dict) or isinstance(body, list):
+                return body
+
+            raise ValueError("Invalid query.")
         if content_type in ["application/x-www-form-urlencoded", "multipart/form-data"]:
             return request.POST
         return {}
@@ -476,8 +606,8 @@ class GraphQLView(View):
             operation_name = None
 
         if request.content_type == "multipart/form-data":
-            operations = json.loads(data.get("operations", "{}"))
-            files_map = json.loads(data.get("map", "{}"))
+            operations = orjson.loads(data.get("operations", "{}"))
+            files_map = orjson.loads(data.get("map", "{}"))
             for file_key in files_map:
                 # file key is which file it is in the form-data
                 file_instances = files_map[file_key]
@@ -485,6 +615,12 @@ class GraphQLView(View):
                     obj_set(operations, file_instance, file_key, False)
             query = operations.get("query")
             variables = operations.get("variables")
+        if not isinstance(query, str):
+            query = None
+        if not isinstance(variables, dict):
+            variables = None
+        if not isinstance(operation_name, str):
+            operation_name = None
         return query, variables, operation_name
 
     def format_error(self, error):

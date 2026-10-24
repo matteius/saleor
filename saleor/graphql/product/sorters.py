@@ -23,7 +23,7 @@ from ...product.models import (
     Product,
     ProductChannelListing,
 )
-from ..core.descriptions import CHANNEL_REQUIRED
+from ..core.descriptions import ADDED_IN_323, CHANNEL_REQUIRED
 from ..core.doc_category import DOC_CATEGORY_PRODUCTS
 from ..core.types import BaseEnum, ChannelSortInputObjectType, SortInputObjectType
 
@@ -304,6 +304,7 @@ class ProductOrder(ChannelSortInputObjectType):
 
 class ProductVariantSortField(BaseEnum):
     LAST_MODIFIED_AT = ["updated_at", "name", "pk"]
+    ID = ["pk"]
 
     class Meta:
         doc_category = DOC_CATEGORY_PRODUCTS
@@ -312,6 +313,7 @@ class ProductVariantSortField(BaseEnum):
     def description(self):
         descriptions = {
             ProductVariantSortField.LAST_MODIFIED_AT.name: "last modification date.",  # type: ignore[attr-defined] # noqa: E501
+            ProductVariantSortField.ID.name: "ID." + ADDED_IN_323,  # type: ignore[attr-defined] # noqa: E501
         }
         if self.name in descriptions:
             return f"Sort product variants by {descriptions[self.name]}"
@@ -345,6 +347,17 @@ class ProductTypeSortField(BaseEnum):
         if self.name in descriptions:
             return f"Sort products by {descriptions[self.name]}."
         raise ValueError(f"Unsupported enum value: {self.value}")
+
+    @property
+    def deprecation_reason(self):
+        deprecations = {
+            ProductTypeSortField.DIGITAL.name: (  # type: ignore[attr-defined] # graphene.Enum is not typed # noqa: E501
+                "DIGITAL will removed in Saleor 3.24.0. Use SHIPPING_REQUIRED instead."
+            ),
+        }
+        if self.name in deprecations:
+            return deprecations[self.name]
+        return None
 
 
 class ProductTypeSortingInput(SortInputObjectType):

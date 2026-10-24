@@ -16,7 +16,7 @@ from ....core.weight import convert_weight_to_default_weight_unit
 from ....permission.auth_filters import AuthorizationFilters
 from ....permission.enums import OrderPermissions, ProductPermissions
 from ....permission.utils import has_one_of_permissions
-from ....product import models
+from ....product import ProductMediaTypes, models
 from ....product.models import ALL_PRODUCTS_PERMISSIONS
 from ....product.utils import calculate_revenue_for_variant
 from ....product.utils.availability import (
@@ -31,6 +31,7 @@ from ....tax.utils import (
 )
 from ....thumbnail.utils import (
     get_image_or_proxy_url,
+    get_original_image_proxy_url,
     get_thumbnail_format,
     get_thumbnail_size,
 )
@@ -68,6 +69,8 @@ from ...core.descriptions import (
     ADDED_IN_321,
     ADDED_IN_322,
     DEPRECATED_IN_3X_INPUT,
+    DEPRECATED_PREORDER,
+    DEPRECATED_PREORDER_TYPE_DESCRIPTION,
     RICH_CONTENT,
 )
 from ...core.doc_category import DOC_CATEGORY_PRODUCTS
@@ -123,9 +126,11 @@ from ...translations.types import ProductTranslation, ProductVariantTranslation
 from ...utils import get_user_or_app_from_context
 from ...utils.filters import reporting_period_to_date
 from ...warehouse.dataloaders import (
+    AvailableQuantityByProductVariantIdAndChannelSlugLoader,
     AvailableQuantityByProductVariantIdCountryCodeAndChannelSlugLoader,
     PreorderQuantityReservedByVariantChannelListingIdLoader,
     StocksByProductVariantIdLoader,
+    StocksWithAvailableQuantityByProductVariantIdAndChannelSlugLoader,
     StocksWithAvailableQuantityByProductVariantIdCountryCodeAndChannelLoader,
 )
 from ...warehouse.types import Stock
@@ -167,7 +172,6 @@ from ..resolvers import (
 )
 from ..sorters import MediaSortingInput, ProductVariantSortingInput
 from .channels import ProductChannelListing, ProductVariantChannelListing
-from .digital_contents import DigitalContent
 
 destination_address_argument = graphene.Argument(
     account_types.AddressInput,
@@ -176,6 +180,20 @@ destination_address_argument = graphene.Argument(
         "for this product is checked. If address is empty, uses "
         "`Shop.companyAddress` or fallbacks to server's "
         "`settings.DEFAULT_COUNTRY` configuration."
+    ),
+)
+
+deprecated_destination_address_argument = graphene.Argument(
+    account_types.AddressInput,
+    description=(
+        "Destination address used to find warehouses where stock availability "
+        "for this product is checked. If address is empty, uses "
+        "`Shop.companyAddress` or fallbacks to server's "
+        "`settings.DEFAULT_COUNTRY` configuration. "
+        "When `Shop.useLegacyShippingZoneStockAvailability` is disabled, "
+        "this argument is ignored — stock availability is determined by the "
+        "direct warehouse-channel link instead of shipping zones."
+        + DEPRECATED_IN_3X_INPUT
     ),
 )
 
@@ -272,18 +290,27 @@ class PreorderData(BaseObjectType):
         required=False,
         description="The global preorder threshold for product variant.",
         permissions=[ProductPermissions.MANAGE_PRODUCTS],
+        deprecation_reason=DEPRECATED_PREORDER,
     )
     global_sold_units = PermissionsField(
         graphene.Int,
         required=True,
         description="Total number of sold product variant during preorder.",
         permissions=[ProductPermissions.MANAGE_PRODUCTS],
+        deprecation_reason=DEPRECATED_PREORDER,
     )
-    end_date = DateTime(required=False, description="Preorder end date.")
+    end_date = DateTime(
+        required=False,
+        description="Preorder end date.",
+        deprecation_reason=DEPRECATED_PREORDER,
+    )
 
     class Meta:
         doc_category = DOC_CATEGORY_PRODUCTS
-        description = "Represents preorder settings for product variant."
+        description = (
+            "Represents preorder settings for product variant."
+            + DEPRECATED_PREORDER_TYPE_DESCRIPTION
+        )
 
     @staticmethod
     def resolve_global_threshold(root, _info):
@@ -405,15 +432,10 @@ class ProductVariant(ChannelContextType[models.ProductVariant]):
         type_name="product variant",
         resolver=ChannelContextType.resolve_translation,
     )
-    digital_content = PermissionsField(
-        DigitalContent,
-        description="Digital content for the product variant.",
-        permissions=[ProductPermissions.MANAGE_PRODUCTS],
-    )
     stocks = PermissionsField(
         NonNullList(Stock),
         description="Stocks for the product variant.",
-        address=destination_address_argument,
+        address=deprecated_destination_address_argument,
         country_code=graphene.Argument(
             CountryCodeEnum,
             description=(
@@ -434,7 +456,7 @@ class ProductVariant(ChannelContextType[models.ProductVariant]):
             "no `limitQuantityPerCheckout` in global settings has been set, and "
             "`productVariant` stocks are not tracked."
         ),
-        address=destination_address_argument,
+        address=deprecated_destination_address_argument,
         country_code=graphene.Argument(
             CountryCodeEnum,
             description=(
@@ -450,6 +472,7 @@ class ProductVariant(ChannelContextType[models.ProductVariant]):
         PreorderData,
         required=False,
         description="Preorder data for product variant.",
+        deprecation_reason=DEPRECATED_PREORDER,
     )
     created = DateTime(
         required=True,
@@ -478,23 +501,33 @@ class ProductVariant(ChannelContextType[models.ProductVariant]):
 
     @staticmethod
     def resolve_channel(root: ChannelContext[models.Product], _info):
-        return root.channel_slug
+        return str(root.channel_slug) if root.channel_slug else None
 
     @staticmethod
+    @load_site_callback
     def resolve_stocks(
         root: ChannelContext[models.ProductVariant],
         info,
+        site,
         address=None,
         country_code=None,
     ):
         if address is not None:
             country_code = address.country
-        channle_slug = root.channel_slug
-        if channle_slug or country_code:
+        channel_slug = root.channel_slug
+        if not channel_slug and not country_code:
+            return StocksByProductVariantIdLoader(info.context).load(root.node.id)
+
+        calculate_stocks_with_shipping_zones = (
+            site.settings.use_legacy_shipping_zone_stock_availability
+        )
+        if calculate_stocks_with_shipping_zones:
             return StocksWithAvailableQuantityByProductVariantIdCountryCodeAndChannelLoader(  # noqa: E501
                 info.context
             ).load((root.node.id, country_code, root.channel_slug))
-        return StocksByProductVariantIdLoader(info.context).load(root.node.id)
+        return StocksWithAvailableQuantityByProductVariantIdAndChannelSlugLoader(
+            info.context
+        ).load((root.node.id, str(channel_slug)))
 
     @staticmethod
     @load_site_callback
@@ -611,13 +644,16 @@ class ProductVariant(ChannelContextType[models.ProductVariant]):
         if not root.node.track_inventory:
             return global_quantity_limit_per_checkout
 
-        return AvailableQuantityByProductVariantIdCountryCodeAndChannelSlugLoader(
+        include_shipping_zones = (
+            site.settings.use_legacy_shipping_zone_stock_availability
+        )
+        if include_shipping_zones:
+            return AvailableQuantityByProductVariantIdCountryCodeAndChannelSlugLoader(
+                info.context
+            ).load((root.node.id, country_code, channel_slug))
+        return AvailableQuantityByProductVariantIdAndChannelSlugLoader(
             info.context
-        ).load((root.node.id, country_code, channel_slug))
-
-    @staticmethod
-    def resolve_digital_content(root: ChannelContext[models.ProductVariant], _info):
-        return getattr(root.node, "digital_content", None)
+        ).load((root.node.id, channel_slug))
 
     @classmethod
     def resolve_assigned_attribute(
@@ -943,7 +979,7 @@ class Product(ChannelContextType[models.Product]):
         ),
     )
     is_available = graphene.Boolean(
-        address=destination_address_argument,
+        address=deprecated_destination_address_argument,
         description=(
             "Whether the product is in stock, set as available for purchase in the "
             "given channel, and published."
@@ -1115,7 +1151,7 @@ class Product(ChannelContextType[models.Product]):
 
     @staticmethod
     def resolve_channel(root: ChannelContext[models.Product], _info):
-        return root.channel_slug
+        return str(root.channel_slug) if root.channel_slug else None
 
     @staticmethod
     def resolve_default_variant(root: ChannelContext[models.Product], info):
@@ -1313,8 +1349,9 @@ class Product(ChannelContextType[models.Product]):
 
     @staticmethod
     @traced_resolver
+    @load_site_callback
     def resolve_is_available(
-        root: ChannelContext[models.Product], info, *, address=None
+        root: ChannelContext[models.Product], info, site, *, address=None
     ):
         if not root.channel_slug:
             return None
@@ -1334,11 +1371,24 @@ class Product(ChannelContextType[models.Product]):
                     return True
             return False
 
+        include_shipping_zones = (
+            site.settings.use_legacy_shipping_zone_stock_availability
+        )
+
         def load_variants_availability(variants):
-            keys = [(variant.id, country_code, channel_slug) for variant in variants]
-            return AvailableQuantityByProductVariantIdCountryCodeAndChannelSlugLoader(
+            if include_shipping_zones:
+                country_keys = [
+                    (variant.id, country_code, channel_slug) for variant in variants
+                ]
+                return (
+                    AvailableQuantityByProductVariantIdCountryCodeAndChannelSlugLoader(
+                        info.context
+                    ).load_many(country_keys)
+                )
+            channel_keys = [(variant.id, channel_slug) for variant in variants]
+            return AvailableQuantityByProductVariantIdAndChannelSlugLoader(
                 info.context
-            ).load_many(keys)
+            ).load_many(channel_keys)
 
         def check_variant_availability():
             if has_required_permissions and not channel_slug:
@@ -1736,13 +1786,25 @@ class ProductType(ModelObjectType[models.ProductType]):
     name = graphene.String(required=True, description="Name of the product type.")
     slug = graphene.String(required=True, description="Slug of the product type.")
     has_variants = graphene.Boolean(
-        required=True, description="Whether the product type has variants."
+        required=True,
+        description="Whether the product type has variants.",
+        deprecation_reason=(
+            "This is a leftover from the past Simple/Configurable product distinction. "
+            "Products can have multiple variants regardless of this setting. "
+        ),
     )
     is_shipping_required = graphene.Boolean(
         required=True, description="Whether shipping is required for this product type."
     )
     is_digital = graphene.Boolean(
-        required=True, description="Whether the product type is digital."
+        required=True,
+        description=(
+            "Whether the product type is digital - doesn't have any effect, "
+            "it's present for backward-compatibility."
+        ),
+        deprecation_reason=(
+            "Will be removed in v3.24.0, use metadata or attributes instead."
+        ),
     )
     weight = graphene.Field(Weight, description="Weight of the product type.")
     kind = ProductTypeKindEnum(description="The product type kind.", required=True)
@@ -2041,15 +2103,22 @@ class ProductMedia(ModelObjectType[models.ProductMedia]):
         size: int | None = None,
         format: str | None = None,
     ) -> str | None | Promise[str]:
-        if root.external_url:
+        if root.external_url and root.type != ProductMediaTypes.IMAGE:
             return root.external_url
 
-        if not root.image:
-            return None
-
-        if size == 0:
+        # Bypass proxy URL when image is already in-place and original size is
+        # requested.
+        if root.image and size == 0:
             return build_absolute_uri(root.image.url)
 
+        # If image is not there yet and original size is requested return proxy URL for
+        # original.
+        if size == 0:
+            return build_absolute_uri(
+                get_original_image_proxy_url(str(root.id), "ProductMedia")
+            )
+
+        # Else, return proxy URL for thumbnail.
         format = get_thumbnail_format(format)
         selected_size = get_thumbnail_size(size)
 

@@ -15,6 +15,10 @@ from ....attribute.utils.attribute_assignment import (
 from ....attribute.utils.shared import AttrValuesInput
 from ....core import ResolveInfo
 from ....core.context import ChannelContext
+from ....core.descriptions import (
+    DEPRECATED_PREORDER_INPUT,
+    DEPRECATED_PREORDER_TYPE_DESCRIPTION,
+)
 from ....core.doc_category import DOC_CATEGORY_PRODUCTS
 from ....core.mutations import DeprecatedModelMutation
 from ....core.scalars import DateTime, WeightScalar
@@ -37,12 +41,20 @@ T_INPUT_MAP = list[tuple[attribute_models.Attribute, AttrValuesInput]]
 
 class PreorderSettingsInput(BaseInputObjectType):
     global_threshold = graphene.Int(
-        description="The global threshold for preorder variant."
+        description=(
+            f"The global threshold for preorder variant.{DEPRECATED_PREORDER_INPUT}"
+        )
     )
-    end_date = DateTime(description="The end date for preorder.")
+    end_date = DateTime(
+        description=f"The end date for preorder.{DEPRECATED_PREORDER_INPUT}"
+    )
 
     class Meta:
         doc_category = DOC_CATEGORY_PRODUCTS
+        description = (
+            "Preorder settings for a product variant."
+            + DEPRECATED_PREORDER_TYPE_DESCRIPTION
+        )
 
 
 class ProductVariantInput(BaseInputObjectType):
@@ -62,7 +74,9 @@ class ProductVariantInput(BaseInputObjectType):
     )
     weight = WeightScalar(description="Weight of the Product Variant.", required=False)
     preorder = PreorderSettingsInput(
-        description="Determines if variant is in preorder."
+        description=(
+            f"Determines if variant is in preorder.{DEPRECATED_PREORDER_INPUT}"
+        )
     )
     quantity_limit_per_customer = graphene.Int(
         required=False,
@@ -162,33 +176,25 @@ class ProductVariantCreate(DeprecatedModelMutation):
         except ValidationError as e:
             raise ValidationError({"attributes": e}) from e
 
-        # Run the validation only if product type is configurable
-        if product_type.has_variants:
-            # Attributes are provided as list of `AttributeValueInput` objects.
-            # We need to transform them into the format they're stored in the
-            # `Product` model, which is HStore field that maps attribute's PK to
-            # the value's PK.
-            try:
-                if attributes:
-                    attributes_qs = product_type.variant_attributes.all()
-                    cleaned_attributes: T_INPUT_MAP = (
-                        AttributeAssignmentMixin.clean_input(attributes, attributes_qs)
-                    )
-                    cleaned_input["attributes"] = cleaned_attributes
-                elif product_type.variant_attributes.filter(value_required=True):
-                    # if attributes were not provided on creation
-                    raise ValidationError(
-                        "All required attributes must take a value.",
-                        ProductErrorCode.REQUIRED.value,
-                    )
-            except ValidationError as e:
-                raise ValidationError({"attributes": e}) from e
-        else:
+        # Attributes are provided as list of `AttributeValueInput` objects.
+        # We need to transform them into the format they're stored in the
+        # `Product` model, which is HStore field that maps attribute's PK to
+        # the value's PK.
+        try:
             if attributes:
-                raise ValidationError(
-                    "Cannot assign attributes for product type without variants",
-                    ProductErrorCode.INVALID.value,
+                attributes_qs = product_type.variant_attributes.all()
+                cleaned_attributes: T_INPUT_MAP = AttributeAssignmentMixin.clean_input(
+                    attributes, attributes_qs
                 )
+                cleaned_input["attributes"] = cleaned_attributes
+            elif product_type.variant_attributes.filter(value_required=True):
+                # if attributes were not provided on creation
+                raise ValidationError(
+                    "All required attributes must take a value.",
+                    ProductErrorCode.REQUIRED.value,
+                )
+        except ValidationError as e:
+            raise ValidationError({"attributes": e}) from e
 
     @classmethod
     def get_product(cls, cleaned_input: dict) -> models.Product:

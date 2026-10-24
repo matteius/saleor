@@ -27,7 +27,6 @@ from ..core.context import (
 )
 from ..core.descriptions import (
     ADDED_IN_322,
-    DEFAULT_DEPRECATION_REASON,
     DEPRECATED_IN_3X_INPUT,
     NESTED_QUERY_LIMIT_DESCRIPTION,
 )
@@ -63,6 +62,7 @@ from ..translations.types import AttributeTranslation, AttributeValueTranslation
 from .dataloaders.assigned_attributes import (
     AttributeValuesByPageIdAndAttributeIdAndLimitLoader,
     AttributeValuesByProductIdAndAttributeIdAndLimitLoader,
+    AttributeValuesByUserIdAndAttributeIdAndLimitLoader,
     AttributeValuesByVariantIdAndAttributeIdAndLimitLoader,
 )
 from .dataloaders.attributes import (
@@ -72,7 +72,12 @@ from .dataloaders.reference_types import (
     AttributeReferencePageTypesByAttributeIdAndLimitLoader,
     AttributeReferenceProductTypesByAttributeIdAndLimitLoader,
 )
-from .descriptions import AttributeDescriptions, AttributeValueDescriptions
+from .descriptions import (
+    DASHBOARD_FLAG_DEPRECATION_REASON,
+    STOREFRONT_FLAG_DEPRECATION_REASON,
+    AttributeDescriptions,
+    AttributeValueDescriptions,
+)
 from .enums import AttributeEntityTypeEnum, AttributeInputTypeEnum, AttributeTypeEnum
 from .filters import (
     AttributeValueFilterInput,
@@ -293,9 +298,9 @@ class Attribute(ChannelContextType[models.Attribute]):
         ),
     )
 
-    name = graphene.String(description=AttributeDescriptions.NAME)
-    slug = graphene.String(description=AttributeDescriptions.SLUG)
-    type = AttributeTypeEnum(description=AttributeDescriptions.TYPE)
+    name = graphene.String(description=AttributeDescriptions.NAME, required=True)
+    slug = graphene.String(description=AttributeDescriptions.SLUG, required=True)
+    type = AttributeTypeEnum(description=AttributeDescriptions.TYPE, required=True)
     unit = MeasurementUnitsEnum(description=AttributeDescriptions.UNIT)
     choices = FilterConnectionField(
         AttributeValueCountableConnection,
@@ -345,7 +350,7 @@ class Attribute(ChannelContextType[models.Attribute]):
             f"{ProductTypePermissions.MANAGE_PRODUCT_TYPES_AND_ATTRIBUTES.name}."
         ),
         required=True,
-        deprecation_reason=DEFAULT_DEPRECATION_REASON,
+        deprecation_reason=STOREFRONT_FLAG_DEPRECATION_REASON,
     )
     filterable_in_dashboard = graphene.Boolean(
         description=(
@@ -356,6 +361,7 @@ class Attribute(ChannelContextType[models.Attribute]):
             f"{ProductTypePermissions.MANAGE_PRODUCT_TYPES_AND_ATTRIBUTES.name}."
         ),
         required=True,
+        deprecation_reason=DASHBOARD_FLAG_DEPRECATION_REASON,
     )
     available_in_grid = graphene.Boolean(
         description=(
@@ -366,7 +372,7 @@ class Attribute(ChannelContextType[models.Attribute]):
             f"{ProductTypePermissions.MANAGE_PRODUCT_TYPES_AND_ATTRIBUTES.name}."
         ),
         required=True,
-        deprecation_reason=DEFAULT_DEPRECATION_REASON,
+        deprecation_reason=STOREFRONT_FLAG_DEPRECATION_REASON,
     )
     storefront_search_position = graphene.Int(
         description=(
@@ -377,7 +383,7 @@ class Attribute(ChannelContextType[models.Attribute]):
             f"{ProductTypePermissions.MANAGE_PRODUCT_TYPES_AND_ATTRIBUTES.name}."
         ),
         required=True,
-        deprecation_reason=DEFAULT_DEPRECATION_REASON,
+        deprecation_reason=STOREFRONT_FLAG_DEPRECATION_REASON,
     )
     translation = TranslationField(
         AttributeTranslation,
@@ -713,6 +719,10 @@ def get_attribute_values(
     if root.page_id:
         return AttributeValuesByPageIdAndAttributeIdAndLimitLoader(info.context).load(
             (root.page_id, root.attribute.id, limit)
+        )
+    if root.user_id:
+        return AttributeValuesByUserIdAndAttributeIdAndLimitLoader(info.context).load(
+            (root.user_id, root.attribute.id, limit)
         )
     return Promise.resolve([])
 
@@ -1496,6 +1506,14 @@ class AssignedSwatchAttributeValue(BaseObjectType):
     file = graphene.Field(
         File, description="File associated with the attribute.", required=False
     )
+    translation = graphene.String(
+        language_code=graphene.Argument(
+            LanguageCodeEnum,
+            required=True,
+        ),
+        description="Translation of the name." + ADDED_IN_322,
+        required=False,
+    )
 
     @staticmethod
     def resolve_hex_color(
@@ -1510,6 +1528,16 @@ class AssignedSwatchAttributeValue(BaseObjectType):
         if not root.file_url:
             return None
         return File(url=root.file_url, content_type=root.content_type)
+
+    @staticmethod
+    def resolve_translation(
+        root: models.AttributeValue, info: ResolveInfo, *, language_code
+    ) -> Promise[str | None] | None:
+        return (
+            AttributeValueTranslationByIdAndLanguageCodeLoader(info.context)
+            .load((root.id, language_code))
+            .then(lambda translation: translation.name if translation else None)
+        )
 
     class Meta:
         description = "Represents a single swatch value." + ADDED_IN_322

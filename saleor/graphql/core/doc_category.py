@@ -21,6 +21,7 @@ DOC_CATEGORY_WEBHOOKS = "Webhooks"
 # Map models to category names in doc directive.
 DOC_CATEGORY_MAP = {
     "account.Address": DOC_CATEGORY_USERS,
+    "account.CustomerType": DOC_CATEGORY_USERS,
     "account.CustomerEvent": DOC_CATEGORY_USERS,
     "account.Group": DOC_CATEGORY_USERS,
     "account.StaffNotificationRecipient": DOC_CATEGORY_USERS,
@@ -73,8 +74,6 @@ DOC_CATEGORY_MAP = {
     "product.Collection": DOC_CATEGORY_PRODUCTS,
     "product.CollectionChannelListing": DOC_CATEGORY_PRODUCTS,
     "product.CollectionTranslation": DOC_CATEGORY_PRODUCTS,
-    "product.DigitalContent": DOC_CATEGORY_PRODUCTS,
-    "product.DigitalContentUrl": DOC_CATEGORY_PRODUCTS,
     "product.Product": DOC_CATEGORY_PRODUCTS,
     "product.ProductTranslation": DOC_CATEGORY_PRODUCTS,
     "product.ProductChannelListing": DOC_CATEGORY_PRODUCTS,

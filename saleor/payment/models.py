@@ -175,6 +175,8 @@ class TransactionItem(ModelWithMetadata):
         choices=PaymentMethodType.CHOICES,
     )
     payment_method_name = models.CharField(max_length=256, blank=True, null=True)
+    gift_card_last_chars = models.CharField(max_length=4, blank=True, null=True)
+    gift_card_brand = models.CharField(max_length=40, blank=True, null=True)
 
     gift_card = models.ForeignKey(
         "giftcard.GiftCard",
@@ -182,12 +184,34 @@ class TransactionItem(ModelWithMetadata):
         on_delete=models.SET_NULL,
     )
 
+    def has_money_movement(self) -> bool:
+        """Return True if any money was moved by this transaction.
+
+        A transaction with all amounts at zero is an abandoned payment attempt.
+        """
+        return any(
+            (
+                self.authorized_value,
+                self.authorize_pending_value,
+                self.charged_value,
+                self.charge_pending_value,
+                self.refunded_value,
+                self.refund_pending_value,
+                self.canceled_value,
+                self.cancel_pending_value,
+            )
+        )
+
     class Meta:
         ordering = ("pk",)
         indexes = [
             *ModelWithMetadata.Meta.indexes,
             BTreeIndex(fields=["payment_method_type"], name="payment_method_type_ids"),
             BTreeIndex(fields=["cc_brand"], name="cc_brand_idx"),
+            BTreeIndex(fields=["psp_reference"], name="psp_reference_idx"),
+            BTreeIndex(fields=["app_identifier"], name="app_identifier_idx"),
+            BTreeIndex(fields=["created_at"], name="transaction_created_at_idx"),
+            BTreeIndex(fields=["modified_at"], name="transaction_modified_at_idx"),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -252,6 +276,10 @@ class TransactionEvent(models.Model):
 
     class Meta:
         ordering = ("pk",)
+        indexes = [
+            BTreeIndex(fields=["created_at"], name="transactionevent_created_at_idx"),
+            BTreeIndex(fields=["type"], name="transactionevent_type_idx"),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=["transaction_id", "idempotency_key"],
@@ -278,7 +306,6 @@ class Payment(ModelWithMetadata):
     gateway = models.CharField(max_length=255)
     is_active = models.BooleanField(default=True)
     to_confirm = models.BooleanField(default=False)
-    partial = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     modified_at = models.DateTimeField(auto_now=True)
     charge_status = models.CharField(
@@ -480,18 +507,6 @@ class Transaction(models.Model):
     # @deprecated
     gateway_response = JSONField(encoder=DjangoJSONEncoder)
     already_processed = models.BooleanField(default=False)
-
-    """
-    Legacy fields that allow Adyen plugin to work until it's removed.
-
-    Previously Adyen plugin was using gateway_response which holds entire response for every Payment plugin.
-    Adyen plugin is the only plugin using this field, it has access to result_code and payment_method.
-
-    To remove gateway_response we introduce two legacy fields that Adyen can write to and gateway_response can be removed.
-    Once plugin is removed, these fields should be removed from the model.
-    """
-    legacy_adyen_plugin_result_code = models.TextField(null=True)
-    legacy_adyen_plugin_payment_method = models.TextField(null=True)
 
     class Meta:
         ordering = ("pk",)

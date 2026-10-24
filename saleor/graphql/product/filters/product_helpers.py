@@ -1,5 +1,6 @@
 import datetime
 
+from django.contrib.sites.models import Site
 from django.db.models import Exists, OuterRef, Q, Subquery, Sum
 from django.db.models.expressions import ExpressionWrapper
 from django.db.models.fields import IntegerField
@@ -7,6 +8,7 @@ from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 from ....channel.models import Channel
+from ....core.search import prefix_search
 from ....product import ProductTypeKind
 from ....product.models import (
     Category,
@@ -16,7 +18,6 @@ from ....product.models import (
     ProductVariant,
     ProductVariantChannelListing,
 )
-from ....product.search import search_products
 from ....warehouse.models import Allocation, Reservation, Stock, Warehouse
 from ...utils import resolve_global_ids_to_primary_keys
 from ...utils.filters import (
@@ -116,11 +117,8 @@ def filter_products_by_stock_availability(qs, stock_availability, channel_slug):
         .values_list(Sum("quantity_reserved"))
     )
     reservation_subquery = Subquery(queryset=reservations, output_field=IntegerField())
-    warehouse_pks = list(
-        Warehouse.objects.using(qs.db)
-        .for_channel_with_active_shipping_zone_or_cc(channel_slug)
-        .values_list("pk", flat=True)
-    )
+
+    warehouse_pks = get_available_warehouse_pks_for_product(qs, channel_slug)
     stocks = (
         Stock.objects.using(qs.db)
         .filter(
@@ -136,11 +134,38 @@ def filter_products_by_stock_availability(qs, stock_availability, channel_slug):
         .filter(Exists(stocks.filter(product_variant_id=OuterRef("pk"))))
         .values("product_id")
     )
-    if stock_availability == StockAvailability.IN_STOCK:
+    if stock_availability == StockAvailability.IN_STOCK.value:  # type: ignore[attr-defined]
         qs = qs.filter(Exists(variants.filter(product_id=OuterRef("pk"))))
-    if stock_availability == StockAvailability.OUT_OF_STOCK:
+    if stock_availability == StockAvailability.OUT_OF_STOCK.value:  # type: ignore[attr-defined]
         qs = qs.filter(~Exists(variants.filter(product_id=OuterRef("pk"))))
     return qs
+
+
+def get_available_warehouse_pks_for_product(qs, channel_slug):
+    # refetch the site to make sure that we have the latest settings
+    Site.objects.clear_cache()
+    include_shipping_zones = (
+        Site.objects.get_current().settings.use_legacy_shipping_zone_stock_availability
+    )
+
+    if include_shipping_zones:
+        warehouse_pks = list(
+            Warehouse.objects.using(qs.db)
+            .for_channel_with_active_shipping_zone_or_cc(channel_slug)
+            .values_list("pk", flat=True)
+        )
+    else:
+        channel = Channel.objects.using(qs.db).filter(slug=channel_slug).first()
+        warehouse_pks = (
+            list(
+                Warehouse.objects.using(qs.db)
+                .for_channel(channel.id)
+                .values_list("pk", flat=True)
+            )
+            if channel
+            else []
+        )
+    return warehouse_pks
 
 
 def filter_categories(qs, _, value):
@@ -297,7 +322,7 @@ def filter_stock_availability(qs, _, value, channel_slug):
 
 
 def filter_search(qs, _, value):
-    return search_products(qs, value)
+    return prefix_search(qs, value)
 
 
 def filter_gift_card(qs, _, value):

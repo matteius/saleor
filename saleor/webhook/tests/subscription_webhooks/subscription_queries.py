@@ -55,6 +55,29 @@ ACCOUNT_CONFIRMED = (
 """
 )
 
+ACCOUNT_CONFIRMED_WITH_CHANNEL = (
+    fragments.CUSTOMER_DETAILS
+    + fragments.RECIPIENT_APP_DETAILS
+    + """
+    subscription{
+      event{
+        recipient{
+          ...Recipient
+        }
+        ...on AccountConfirmed{
+          user{
+            ...CustomerDetails
+          }
+          channel{
+            slug
+            id
+          }
+        }
+      }
+    }
+"""
+)
+
 
 ACCOUNT_CHANGE_EMAIL_REQUESTED = (
     fragments.CUSTOMER_DETAILS
@@ -1231,7 +1254,6 @@ PRODUCT_VARIANT_UPDATED = """
     }
 """
 
-
 PRODUCT_VARIANT_DELETED = """
     subscription{
       event{
@@ -1289,6 +1311,36 @@ PRODUCT_VARIANT_STOCK_UPDATED = """
           }
           warehouse{
             id
+          }
+        }
+      }
+    }
+"""
+
+PRODUCT_VARIANT_DISCOUNTED_PRICE_UPDATED = """
+    subscription{
+      event{
+        ...on ProductVariantDiscountedPriceUpdated{
+          productVariant{
+            id
+            pricing{
+              price{
+                gross{
+                  amount
+                }
+              }
+            }
+          }
+          channel{
+            slug
+          }
+          previousPrice{
+            amount
+            currency
+          }
+          newPrice{
+            amount
+            currency
           }
         }
       }
@@ -2231,6 +2283,63 @@ PAGE_TYPE_DELETED = (
 """
 )
 
+CUSTOMER_TYPE_CREATED = (
+    fragments.CUSTOMER_TYPE_DETAILS
+    + fragments.RECIPIENT_APP_DETAILS
+    + """
+    subscription{
+      event{
+        recipient{
+          ...Recipient
+        }
+        ...on CustomerTypeCreated{
+          customerType{
+            ...CustomerTypeDetails
+          }
+        }
+      }
+    }
+"""
+)
+
+CUSTOMER_TYPE_UPDATED = (
+    fragments.CUSTOMER_TYPE_DETAILS
+    + fragments.RECIPIENT_APP_DETAILS
+    + """
+    subscription{
+      event{
+        recipient{
+          ...Recipient
+        }
+        ...on CustomerTypeUpdated{
+          customerType{
+            ...CustomerTypeDetails
+          }
+        }
+      }
+    }
+"""
+)
+
+CUSTOMER_TYPE_DELETED = (
+    fragments.CUSTOMER_TYPE_DETAILS
+    + fragments.RECIPIENT_APP_DETAILS
+    + """
+    subscription{
+      event{
+        recipient{
+          ...Recipient
+        }
+        ...on CustomerTypeDeleted{
+          customerType{
+            ...CustomerTypeDetails
+          }
+        }
+      }
+    }
+"""
+)
+
 PERMISSION_GROUP_CREATED = (
     fragments.PERMISSION_GROUP_DETAILS
     + fragments.RECIPIENT_APP_DETAILS
@@ -2391,124 +2500,6 @@ subscription {
 }
 """
 
-CALCULATE_TAXES_SUBSCRIPTION_QUERY = """
-subscription CalculateTaxes {
-  event {
-    ...CalculateTaxesEvent
-  }
-}
-
-fragment CalculateTaxesEvent on Event {
-  __typename
-  ... on CalculateTaxes {
-    taxBase {
-      ...TaxBase
-    }
-    recipient {
-      privateMetadata {
-        key
-        value
-      }
-    }
-  }
-}
-
-fragment TaxBase on TaxableObject {
-  pricesEnteredWithTax
-  currency
-  channel {
-    slug
-  }
-  discounts {
-    ...TaxDiscount
-  }
-  address {
-    ...Address
-  }
-  shippingPrice {
-    amount
-  }
-  lines {
-    ...TaxBaseLine
-  }
-  sourceObject {
-    __typename
-    ... on Checkout {
-      avataxEntityCode: metafield(key: "avataxEntityCode")
-      user {
-        ...User
-      }
-    }
-    ... on Order {
-      avataxEntityCode: metafield(key: "avataxEntityCode")
-      user {
-        ...User
-      }
-    }
-  }
-}
-
-fragment TaxDiscount on TaxableObjectDiscount {
-  name
-  amount {
-    amount
-  }
-}
-
-fragment Address on Address {
-  streetAddress1
-  streetAddress2
-  city
-  countryArea
-  postalCode
-  country {
-    code
-  }
-}
-
-fragment TaxBaseLine on TaxableObjectLine {
-  sourceLine {
-    __typename
-    ... on CheckoutLine {
-      id
-      checkoutProductVariant: variant {
-        id
-        product {
-          taxClass {
-            id
-            name
-          }
-        }
-      }
-    }
-    ... on OrderLine {
-      id
-      orderProductVariant: variant {
-        id
-        product {
-          taxClass {
-            id
-            name
-          }
-        }
-      }
-    }
-  }
-  quantity
-  unitPrice {
-    amount
-  }
-  totalPrice {
-    amount
-  }
-}
-
-fragment User on User {
-  id
-  email
-  avataxCustomerCode: metafield(key: "avataxCustomerCode")
-}
-"""
 
 TranslationTypes = Enum(
     "TranslationTypes",
@@ -3201,132 +3192,6 @@ PAYMENT_LIST_GATEWAYS = """
     }
     """
 
-ORDER_FILTER_SHIPPING_METHODS = """
-subscription{
-  event{
-    ...on OrderFilterShippingMethods{
-      order{
-        id
-      }
-      shippingMethods{
-      id
-      name
-      }
-    }
-  }
-}
-"""
-
-
-CHECKOUT_FILTER_SHIPPING_METHODS = """
-subscription{
-  event{
-    ...on CheckoutFilterShippingMethods{
-      checkout{
-        id
-      }
-      shippingMethods{
-        name
-        id
-      }
-    }
-  }
-}
-"""
-
-
-SHIPPING_LIST_METHODS_FOR_CHECKOUT = """
-subscription{
-  event{
-    ...on ShippingListMethodsForCheckout{
-      checkout{
-        id
-      }
-      shippingMethods{
-        name
-        id
-      }
-    }
-  }
-}
-"""
-
-
-CHECKOUT_FILTER_SHIPPING_METHODS_CIRCULAR_SHIPPING_METHODS = """
-subscription{
-  event{
-    ...on CheckoutFilterShippingMethods{
-      checkout{
-        id
-        shippingMethods{
-          id
-        }
-      }
-    }
-  }
-}
-"""
-
-CHECKOUT_FILTER_SHIPPING_METHODS_AVAILABLE_SHIPPING_METHODS = """
-subscription{
-  event{
-    ...on CheckoutFilterShippingMethods{
-      checkout{
-        id
-        availableShippingMethods{
-          id
-        }
-      }
-    }
-  }
-}
-"""
-
-CHECKOUT_FILTER_SHIPPING_METHODS_AVAILABLE_PAYMENT_GATEWAYS = """
-subscription{
-  event{
-    ...on CheckoutFilterShippingMethods{
-      checkout{
-        id
-        availablePaymentGateways{
-          id
-        }
-      }
-    }
-  }
-}
-"""
-
-ORDER_FILTER_SHIPPING_METHODS_AVAILABLE_SHIPPING_METHODS = """
-subscription{
-  event{
-    ...on OrderFilterShippingMethods{
-      order{
-        id
-        availableShippingMethods{
-          id
-        }
-      }
-    }
-  }
-}
-"""
-
-ORDER_FILTER_SHIPPING_METHODS_CIRCULAR_SHIPPING_METHODS = """
-subscription{
-  event{
-    ...on OrderFilterShippingMethods{
-      order{
-        id
-        shippingMethods{
-          id
-        }
-      }
-    }
-  }
-}
-"""
-
 
 INVALID_MULTIPLE_EVENTS = """
     subscription{
@@ -3418,46 +3283,6 @@ THUMBNAIL_CREATED = """
           id
           objectId
           mediaUrl
-        }
-      }
-    }
-"""
-
-
-ORDER_CALCULATE_TAXES = """
-    subscription {
-      event {
-        ... on CalculateTaxes {
-          taxBase {
-            sourceObject {
-              ...on Order{
-                discounts {
-                  amount {
-                    amount
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-"""
-
-CHECKOUT_SHIPPING_LIST_AND_FILTER = """
-    subscription {
-      event {
-        ... on CheckoutFilterShippingMethods {
-          __typename
-          checkout {
-            id
-          }
-        }
-        ... on ShippingListMethodsForCheckout {
-          __typename
-          checkout {
-            id
-          }
         }
       }
     }

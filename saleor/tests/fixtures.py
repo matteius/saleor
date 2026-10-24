@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import graphene
 import pytest
 from django.conf import settings
+from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.test.utils import CaptureQueriesContext as BaseCaptureQueriesContext
@@ -15,6 +16,7 @@ from PIL import Image
 
 from ..account.models import Address, Group, StaffNotificationRecipient
 from ..core import JobStatus
+from ..core.db.locks import AdvisoryLock, get_advisory_lock_namespace
 from ..core.models import EventDelivery, EventDeliveryAttempt, EventPayload
 from ..core.payments import PaymentInterface
 from ..core.telemetry import initialize_telemetry, meter, tracer
@@ -125,6 +127,20 @@ def get_test_metrics_data(initialize_test_telemetry):
     meter._meter.metric_reader.get_metrics_data()
 
 
+@pytest.fixture(autouse=True)
+def clear_telemetry_data(initialize_test_telemetry):
+    """Clear telemetry data after each test.
+
+    Tests may execute code that produces metrics and/or traces. In our test suite
+    in-memory metric reader and in-memory span exporter are used. If they're not flushed
+    regularly we may end up with substantial amount of data stored in memory for no
+    reason.
+    """
+    yield
+    meter._meter.metric_reader.get_metrics_data()
+    tracer._tracer.span_exporter.clear()
+
+
 @pytest.fixture
 def capture_queries(pytestconfig):
     cfg = pytestconfig
@@ -147,6 +163,75 @@ def assert_num_queries(capture_queries):
 @pytest.fixture
 def assert_max_num_queries(capture_queries):
     return partial(capture_queries, exact=False)
+
+
+@pytest.fixture
+def assert_locks_rows_before_write(capture_queries):
+    """Assert that the wrapped block locks rows before writing them.
+
+    Verifies the emitted SQL contains exactly one `SELECT ... FOR UPDATE` with a
+    deterministic `ORDER BY` (concurrent lockers acquiring rows in the same
+    order is what prevents deadlocks between them), followed by exactly one
+    `UPDATE`. Asserting on SQL is deliberate, as a missing lock is hard to
+    detect with a behavioral test.
+    """
+
+    @contextmanager
+    def _assert_locks_rows_before_write():
+        with capture_queries() as ctx:
+            yield
+
+        lock_and_update_queries = [
+            query["sql"]
+            for query in ctx.captured_queries
+            if "FOR UPDATE" in query["sql"] or query["sql"].startswith("UPDATE")
+        ]
+        assert len(lock_and_update_queries) == 2, (
+            "expected exactly one lock SELECT and one UPDATE query, got: "
+            f"{lock_and_update_queries}"
+        )
+        lock_query, update_query = lock_and_update_queries
+        assert "FOR UPDATE" in lock_query, "rows were not locked before the write"
+        assert "ORDER BY" in lock_query, "the lock query has no deterministic order"
+        assert update_query.startswith("UPDATE")
+
+    return _assert_locks_rows_before_write
+
+
+@pytest.fixture
+def assert_advisory_lock_before_tree_write(capture_queries):
+    """Assert the given advisory lock is taken before the first write to a table."""
+
+    @contextmanager
+    def _assert_advisory_lock_before_tree_write(lock: AdvisoryLock, table: str):
+        with capture_queries() as ctx:
+            yield
+
+        queries = [query["sql"] for query in ctx.captured_queries]
+        lock_indexes = [
+            index
+            for index, sql in enumerate(queries)
+            if "pg_advisory_xact_lock" in sql
+            and f"{get_advisory_lock_namespace()}, {lock.value}" in sql
+        ]
+        assert len(lock_indexes) == 1, (
+            f"expected exactly one advisory lock query for {lock.name}, got: "
+            f"{[queries[index] for index in lock_indexes]}"
+        )
+        write_prefixes = (
+            f'INSERT INTO "{table}"',
+            f'UPDATE "{table}"',
+            f'DELETE FROM "{table}"',
+        )
+        write_indexes = [
+            index for index, sql in enumerate(queries) if sql.startswith(write_prefixes)
+        ]
+        assert write_indexes, f"no write query on {table} was captured"
+        assert lock_indexes[0] < write_indexes[0], (
+            f"the advisory lock was taken after the first write to {table}"
+        )
+
+    return _assert_advisory_lock_before_tree_write
 
 
 @pytest.fixture
@@ -592,18 +677,13 @@ def description_json():
     return {
         "blocks": [
             {
-                "key": "",
                 "data": {
                     "text": "E-commerce for the PWA era",
+                    "level": 2,
                 },
-                "text": "E-commerce for the PWA era",
-                "type": "header-two",
-                "depth": 0,
-                "entityRanges": [],
-                "inlineStyleRanges": [],
+                "type": "header",
             },
             {
-                "key": "",
                 "data": {
                     "text": (
                         "A modular, high performance e-commerce storefront "
@@ -611,21 +691,14 @@ def description_json():
                     )
                 },
                 "type": "paragraph",
-                "depth": 0,
-                "entityRanges": [],
-                "inlineStyleRanges": [],
             },
             {
-                "key": "",
-                "data": {},
-                "text": "",
+                "data": {
+                    "text": "",
+                },
                 "type": "paragraph",
-                "depth": 0,
-                "entityRanges": [],
-                "inlineStyleRanges": [],
             },
             {
-                "key": "",
                 "data": {
                     "text": (
                         "Saleor is a rapidly-growing open source e-commerce platform "
@@ -638,36 +711,18 @@ def description_json():
                     ),
                 },
                 "type": "paragraph",
-                "depth": 0,
-                "entityRanges": [],
-                "inlineStyleRanges": [],
             },
             {
-                "key": "",
                 "data": {"text": ""},
                 "type": "paragraph",
-                "depth": 0,
-                "entityRanges": [],
-                "inlineStyleRanges": [],
             },
             {
-                "key": "",
                 "data": {
                     "text": "Get Saleor today!",
                 },
                 "type": "paragraph",
-                "depth": 0,
-                "entityRanges": [{"key": 0, "length": 17, "offset": 0}],
-                "inlineStyleRanges": [],
             },
         ],
-        "entityMap": {
-            "0": {
-                "data": {"href": "https://github.com/mirumee/saleor"},
-                "type": "LINK",
-                "mutability": "MUTABLE",
-            }
-        },
     }
 
 
@@ -676,20 +731,15 @@ def other_description_json():
     return {
         "blocks": [
             {
-                "key": "",
                 "data": {
                     "text": (
                         "A GRAPHQL-FIRST <b>ECOMMERCE</b> PLATFORM FOR PERFECTIONISTS"
                     ),
+                    "level": 2,
                 },
-                "text": "A GRAPHQL-FIRST ECOMMERCE PLATFORM FOR PERFECTIONISTS",
-                "type": "header-two",
-                "depth": 0,
-                "entityRanges": [],
-                "inlineStyleRanges": [],
+                "type": "header",
             },
             {
-                "key": "",
                 "data": {
                     "text": (
                         "Saleor is powered by a GraphQL server running on "
@@ -697,12 +747,8 @@ def other_description_json():
                     ),
                 },
                 "type": "paragraph",
-                "depth": 0,
-                "entityRanges": [],
-                "inlineStyleRanges": [],
             },
         ],
-        "entityMap": {},
     }
 
 
@@ -1248,6 +1294,9 @@ def async_subscription_webhooks_with_root_objects(
     subscription_page_type_created_webhook,
     subscription_page_type_updated_webhook,
     subscription_page_type_deleted_webhook,
+    subscription_customer_type_created_webhook,
+    subscription_customer_type_updated_webhook,
+    subscription_customer_type_deleted_webhook,
     subscription_permission_group_created_webhook,
     subscription_permission_group_updated_webhook,
     subscription_permission_group_deleted_webhook,
@@ -1283,6 +1332,7 @@ def async_subscription_webhooks_with_root_objects(
     fulfillment,
     stock,
     customer_user,
+    customer_type,
     collection,
     checkout,
     page,
@@ -1502,6 +1552,7 @@ def async_subscription_webhooks_with_root_objects(
         ],
         events.CUSTOMER_CREATED: [subscription_customer_created_webhook, customer_user],
         events.CUSTOMER_UPDATED: [subscription_customer_updated_webhook, customer_user],
+        events.CUSTOMER_DELETED: [subscription_customer_deleted_webhook, customer_user],
         events.CUSTOMER_METADATA_UPDATED: [
             subscription_customer_metadata_updated_webhook,
             customer_user,
@@ -1542,6 +1593,18 @@ def async_subscription_webhooks_with_root_objects(
         events.PAGE_TYPE_CREATED: [subscription_page_type_created_webhook, page_type],
         events.PAGE_TYPE_UPDATED: [subscription_page_type_updated_webhook, page_type],
         events.PAGE_TYPE_DELETED: [subscription_page_type_deleted_webhook, page_type],
+        events.CUSTOMER_TYPE_CREATED: [
+            subscription_customer_type_created_webhook,
+            customer_type,
+        ],
+        events.CUSTOMER_TYPE_UPDATED: [
+            subscription_customer_type_updated_webhook,
+            customer_type,
+        ],
+        events.CUSTOMER_TYPE_DELETED: [
+            subscription_customer_type_deleted_webhook,
+            customer_type,
+        ],
         events.PERMISSION_GROUP_CREATED: [
             subscription_permission_group_created_webhook,
             permission_group_manage_users,
@@ -1702,12 +1765,12 @@ def tax_configuration_flat_rates(channel_USD):
 
 
 @pytest.fixture
-def tax_configuration_tax_app(channel_USD):
+def tax_configuration_tax_app(channel_USD, tax_app):
     tc = channel_USD.tax_configuration
     tc.country_exceptions.all().delete()
     tc.prices_entered_with_tax = False
     tc.tax_calculation_strategy = TaxCalculationStrategy.TAX_APP
-    tc.tax_app_id = "avatax.app"
+    tc.tax_app_id = tax_app.identifier
     tc.save()
     return tc
 
@@ -1721,3 +1784,11 @@ def tax_configuration_avatax_plugin(channel_USD):
     tc.tax_app_id = "plugin:avatax"
     tc.save()
     return tc
+
+
+@pytest.fixture
+def cache_clear():
+    """Clear the cache before & after a test case."""
+    cache.clear()
+    yield
+    cache.clear()

@@ -1,11 +1,8 @@
 import graphene
 
-from .....checkout.fetch import fetch_checkout_info, fetch_checkout_lines
-from .....checkout.models import CheckoutDelivery
-from .....plugins.manager import get_plugins_manager
+from .....checkout.fetch import fetch_checkout_lines
 from ...mutations.utils import (
     CheckoutLineData,
-    assign_delivery_method_to_checkout,
     group_lines_input_data_on_update,
     group_lines_input_on_add,
 )
@@ -69,6 +66,7 @@ def test_group_on_add_when_same_variants_in_multiple_lines_and_price_provided():
             quantity_to_update=True,
             custom_price=1.22,
             custom_price_to_update=True,
+            custom_price_reason_to_update=True,
         ),
         CheckoutLineData(
             variant_id="2",
@@ -77,6 +75,7 @@ def test_group_on_add_when_same_variants_in_multiple_lines_and_price_provided():
             quantity_to_update=True,
             custom_price=10,
             custom_price_to_update=True,
+            custom_price_reason_to_update=True,
         ),
     ]
 
@@ -110,6 +109,7 @@ def test_group_on_add_when_same_variants_in_multiple_lines_and_force_new_line():
             quantity_to_update=True,
             custom_price=1.22,
             custom_price_to_update=True,
+            custom_price_reason_to_update=True,
         ),
         CheckoutLineData(
             variant_id="2",
@@ -118,6 +118,7 @@ def test_group_on_add_when_same_variants_in_multiple_lines_and_force_new_line():
             quantity_to_update=True,
             custom_price=10,
             custom_price_to_update=True,
+            custom_price_reason_to_update=True,
         ),
     ]
 
@@ -141,6 +142,7 @@ def test_group_on_update_when_line_id_as_parameter_provided():
             quantity_to_update=True,
             custom_price=1.22,
             custom_price_to_update=True,
+            custom_price_reason_to_update=True,
         ),
         CheckoutLineData(
             variant_id=None,
@@ -149,6 +151,7 @@ def test_group_on_update_when_line_id_as_parameter_provided():
             quantity_to_update=True,
             custom_price=10,
             custom_price_to_update=True,
+            custom_price_reason_to_update=True,
         ),
     ]
 
@@ -177,99 +180,9 @@ def test_group_on_update_when_one_line_and_mixed_parameters_provided(
             quantity_to_update=True,
             custom_price=10,
             custom_price_to_update=True,
+            custom_price_reason_to_update=True,
         )
     ]
     assert expected == group_lines_input_data_on_update(
         lines_data, existing_checkout_lines
     )
-
-
-def test_assign_delivery_method_to_checkout_delivery_method_to_none(
-    checkout_with_delivery_method_for_cc,
-):
-    # given
-    checkout = checkout_with_delivery_method_for_cc
-
-    lines_info, _ = fetch_checkout_lines(checkout)
-
-    manager = get_plugins_manager(allow_replica=False)
-    lines, _ = fetch_checkout_lines(checkout)
-    checkout_info = fetch_checkout_info(checkout, lines, manager)
-
-    # when
-    assign_delivery_method_to_checkout(checkout_info, lines_info, manager, None)
-
-    # then
-    assert checkout_with_delivery_method_for_cc.collection_point_id is None
-    assert checkout_with_delivery_method_for_cc.shipping_address_id is None
-    assert checkout_info.collection_point is None
-
-
-def test_assign_delivery_method_to_checkout_delivery_method_to_external(
-    checkout_with_shipping_method, shipping_app
-):
-    # given
-    checkout = checkout_with_shipping_method
-
-    lines_info, _ = fetch_checkout_lines(checkout)
-
-    manager = get_plugins_manager(allow_replica=False)
-    lines, _ = fetch_checkout_lines(checkout)
-    checkout_info = fetch_checkout_info(checkout, lines, manager)
-
-    app_shipping_id = "abcd"
-    app_shipping_name = "Shipping"
-    method_id = graphene.Node.to_global_id(
-        "app", f"{shipping_app.id}:{app_shipping_id}"
-    )
-
-    shipping_method = CheckoutDelivery.objects.create(
-        checkout=checkout,
-        external_shipping_method_id=method_id,
-        name=app_shipping_name,
-        price_amount="10.00",
-        currency="USD",
-        maximum_delivery_days=7,
-        is_external=True,
-    )
-
-    # when
-    assign_delivery_method_to_checkout(
-        checkout_info, lines_info, manager, shipping_method
-    )
-
-    # then
-    assert checkout.shipping_method_name == app_shipping_name
-    assert checkout.assigned_delivery.shipping_method_id == method_id
-    assert checkout.assigned_delivery.name == app_shipping_name
-    assert checkout_info.collection_point is None
-
-
-def test_assign_delivery_method_to_checkout_delivery_method_to_cc(
-    checkout, shipping_method_weight_based, warehouses_for_cc, checkout_delivery
-):
-    # given
-    checkout.assigned_delivery = checkout_delivery(
-        checkout, shipping_method_weight_based
-    )
-    checkout.shipping_method_name = shipping_method_weight_based.name
-
-    lines_info, _ = fetch_checkout_lines(checkout)
-
-    manager = get_plugins_manager(allow_replica=False)
-    lines, _ = fetch_checkout_lines(checkout)
-    checkout_info = fetch_checkout_info(checkout, lines, manager)
-
-    collection_point = warehouses_for_cc[0]
-
-    # when
-    assign_delivery_method_to_checkout(
-        checkout_info, lines_info, manager, collection_point
-    )
-
-    # then
-    assert checkout.collection_point == collection_point
-    assert checkout.shipping_address == collection_point.address
-    assert int(checkout.shipping_address_id) != int(collection_point.address.id)
-    assert checkout.assigned_delivery is None
-    assert checkout.shipping_method_name is None

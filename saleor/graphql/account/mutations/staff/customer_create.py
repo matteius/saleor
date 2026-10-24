@@ -6,14 +6,16 @@ from django.db import IntegrityError, transaction
 from .....account import events as account_events
 from .....account import models
 from .....account.notifications import send_set_password_notification
-from .....account.search import prepare_user_search_document_value
-from .....core.tokens import token_generator
+from .....account.search import update_user_search_vector
+from .....account.utils import get_default_customer_type
+from .....core.tokens import password_reset_token_generator
 from .....core.tracing import traced_atomic_transaction
 from .....core.utils.url import prepare_url
 from .....permission.enums import AccountPermissions
 from .....plugins.manager import PluginsManager
 from .....webhook.event_types import WebhookEventAsyncType
 from ....account.types import User
+from ....attribute.utils.attribute_assignment import AttributeAssignmentMixin
 from ....channel.utils import clean_channel, validate_channel
 from ....core import ResolveInfo
 from ....core.doc_category import DOC_CATEGORY_USERS
@@ -108,15 +110,20 @@ class CustomerCreate(BaseCustomerCreate):
             addresses_to_set_on_user.append(default_billing_address)
             default_billing_address.save()
 
+        if instance.customer_type_id is None:
+            instance.customer_type = get_default_customer_type()
+
         cls._save(instance)
+
+        if attributes := cleaned_input.get("attributes"):
+            AttributeAssignmentMixin.save(instance, attributes)
 
         if addresses_to_set_on_user:
             instance.addresses.set(addresses_to_set_on_user)
 
         manager = get_plugin_manager_promise(info.context).get()
 
-        instance.search_document = prepare_user_search_document_value(instance)
-        instance.save()
+        update_user_search_vector(instance)
 
         account_events.customer_account_created_event(user=instance)
 
@@ -163,7 +170,7 @@ class CustomerCreate(BaseCustomerCreate):
             plugins_manager,
             channel_slug,
         )
-        token = token_generator.make_token(instance)
+        token = password_reset_token_generator.make_token(instance)
         params = urlencode({"email": instance.email, "token": token})
 
         cls.call_event(
