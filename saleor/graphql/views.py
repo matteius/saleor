@@ -248,7 +248,7 @@ class GraphQLView(View):
         ):
             span.set_attribute(saleor_attributes.COMPONENT, "http")
             span.set_attribute(saleor_attributes.OPERATION_NAME, "http")
-            span.set_attribute(http_attributes.HTTP_REQUEST_METHOD, request.method)  # type: ignore[arg-type]
+            span.set_attribute(http_attributes.HTTP_REQUEST_METHOD, request.method)
             span.set_attribute(
                 url_attributes.URL_FULL,
                 request.build_absolute_uri(request.get_full_path()),
