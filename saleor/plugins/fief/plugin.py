@@ -32,6 +32,7 @@ import secrets
 
 from django.contrib.auth.hashers import make_password
 from django.core.exceptions import ValidationError
+from django.urls import reverse
 from jwt import ExpiredSignatureError, InvalidTokenError
 
 from ...account.models import User
@@ -41,6 +42,7 @@ from ...core.jwt import (
     get_user_from_payload,
     jwt_decode,
 )
+from ...core.utils import build_absolute_uri
 from ..base_plugin import BasePlugin, ExternalAccessTokens
 from ..error_codes import PluginErrorCode
 from ..openid_connect.utils import is_owner_of_token_valid
@@ -103,7 +105,10 @@ class FiefPlugin(BasePlugin):
             self._client = FiefPluginClient(
                 base_url=self.config.apps_fief_base_url,
                 hmac_secret=self.config.hmac_secret,
-                saleor_api_url=saleor_api_url,
+                # Dashboard's standard external-auth inputs omit saleorApiUrl.
+                # Resolve it using the same public/site URL rules as native
+                # Saleor JWTs and webhooks instead of signing an empty tenant.
+                saleor_api_url=saleor_api_url or build_absolute_uri(reverse("api")),
                 default_connection_id=self.config.default_connection_id,
             )
         return self._client

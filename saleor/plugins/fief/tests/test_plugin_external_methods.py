@@ -120,6 +120,26 @@ def test_external_authentication_url_returns_authorization_url(plugin, request_f
     )
 
 
+def test_dashboard_auth_resolves_missing_saleor_url_from_public_site(plugin, settings):
+    settings.PUBLIC_URL = "https://api.shop.example.com"
+    with patch("saleor.plugins.fief.plugin.FiefPluginClient") as client:
+        plugin._get_client(saleor_api_url="")
+    assert (
+        client.call_args.kwargs["saleor_api_url"]
+        == "https://api.shop.example.com/graphql/"
+    )
+
+
+def test_explicit_storefront_api_url_is_preserved(plugin, settings):
+    settings.PUBLIC_URL = "https://api.shop.example.com"
+    with patch("saleor.plugins.fief.plugin.FiefPluginClient") as client:
+        plugin._get_client(saleor_api_url="https://tenant.example.com/graphql/")
+    assert (
+        client.call_args.kwargs["saleor_api_url"]
+        == "https://tenant.example.com/graphql/"
+    )
+
+
 def test_external_authentication_url_returns_previous_value_when_inactive(
     request_factory,
 ):
