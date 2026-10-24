@@ -1,7 +1,7 @@
 """Ensures that uvicorn and Saleor are able to start.
 
 This is done by starting uvicorn in a subprocess, and then trying to send
-a simple GraphQL query once the server is up (determined using ``/health/``)
+a simple GraphQL query until the actual application responds successfully.
 """
 
 import multiprocessing
@@ -48,7 +48,7 @@ def run_uvicorn(server_socket: socket.socket) -> None:
 
 
 def wait_until_healthy(
-    server_process: multiprocessing.Process, health_url: str
+    server_process: multiprocessing.Process, graphql_url: str
 ) -> None:
     deadline = time.monotonic() + STARTUP_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
@@ -57,8 +57,11 @@ def wait_until_healthy(
 
         try:
             # nosemgrep: no-requests-lib
-            response = requests.get(health_url, timeout=(2, 2))
-        except requests.RequestException:
+            response = requests.post(
+                graphql_url, json={"query": "{__typename}"}, timeout=(2, 2)
+            )
+            check_response(response)
+        except (requests.RequestException, AssertionError):
             time.sleep(0.1)
             continue
 
@@ -94,7 +97,7 @@ def main() -> None:
     server_socket.close()
 
     try:
-        wait_until_healthy(server_process, f"http://{addr}:{port}/health/")
+        wait_until_healthy(server_process, f"http://{addr}:{port}/graphql/")
 
         # nosemgrep: no-requests-lib # this is an internal CI/CD check
         response = requests.post(
