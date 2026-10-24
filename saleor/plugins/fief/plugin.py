@@ -165,9 +165,7 @@ class FiefPlugin(BasePlugin):
     # BasePlugin overrides
     # ------------------------------------------------------------------
 
-    def external_authentication_url(
-        self, data: dict, request, previous_value
-    ) -> dict:
+    def external_authentication_url(self, data: dict, request, previous_value) -> dict:
         if not self.active:
             return previous_value
 

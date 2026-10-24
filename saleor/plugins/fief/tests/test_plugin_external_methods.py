@@ -91,9 +91,7 @@ def fief_claims():
 # ---------------------------------------------------------------------------
 
 
-def test_external_authentication_url_returns_authorization_url(
-    plugin, request_factory
-):
+def test_external_authentication_url_returns_authorization_url(plugin, request_factory):
     # given
     fake_client = MagicMock()
     fake_client.authentication_url.return_value = AuthenticationUrlResponse(
@@ -195,9 +193,7 @@ def test_external_obtain_access_tokens_creates_user_and_returns_jwt(
     # when
     with (
         patch.object(plugin, "_get_client", return_value=fake_client),
-        patch(
-            "saleor.plugins.fief.plugin.User.objects", fake_user_manager
-        ),
+        patch("saleor.plugins.fief.plugin.User.objects", fake_user_manager),
         patch(
             "saleor.plugins.fief.plugin.create_access_token",
             return_value="saleor.access.jwt",
@@ -207,9 +203,7 @@ def test_external_obtain_access_tokens_creates_user_and_returns_jwt(
             return_value="saleor.refresh.jwt",
         ),
     ):
-        result = plugin.external_obtain_access_tokens(
-            data, request_factory, None
-        )
+        result = plugin.external_obtain_access_tokens(data, request_factory, None)
 
     # then
     assert isinstance(result, ExternalAccessTokens)
@@ -258,9 +252,7 @@ def test_external_obtain_access_tokens_reuses_existing_user(
     # when
     with (
         patch.object(plugin, "_get_client", return_value=fake_client),
-        patch(
-            "saleor.plugins.fief.plugin.User.objects", fake_user_manager
-        ),
+        patch("saleor.plugins.fief.plugin.User.objects", fake_user_manager),
         patch(
             "saleor.plugins.fief.plugin.create_access_token",
             return_value="saleor.access.jwt",
@@ -270,18 +262,14 @@ def test_external_obtain_access_tokens_reuses_existing_user(
             return_value="saleor.refresh.jwt",
         ),
     ):
-        result = plugin.external_obtain_access_tokens(
-            data, request_factory, None
-        )
+        result = plugin.external_obtain_access_tokens(data, request_factory, None)
 
     # then
     assert result.user is existing
     fake_user_manager.get_or_create.assert_called_once()
 
 
-def test_external_obtain_access_tokens_raises_on_missing_code(
-    plugin, request_factory
-):
+def test_external_obtain_access_tokens_raises_on_missing_code(plugin, request_factory):
     # given
     data = {"state": "abc"}
 
@@ -330,9 +318,7 @@ def test_external_refresh_re_encodes_jwt_on_success(
     # when
     with (
         patch.object(plugin, "_get_client", return_value=fake_client),
-        patch(
-            "saleor.plugins.fief.plugin.User.objects", fake_user_manager
-        ),
+        patch("saleor.plugins.fief.plugin.User.objects", fake_user_manager),
         patch(
             "saleor.plugins.fief.plugin.create_access_token",
             return_value="new.saleor.access.jwt",
@@ -387,9 +373,7 @@ def test_external_refresh_raises_on_missing_refresh_token(plugin, request_factor
 def test_external_refresh_returns_previous_value_when_inactive(request_factory):
     inactive = _make_plugin(active=False)
     sentinel = ExternalAccessTokens(token="prev")
-    out = inactive.external_refresh(
-        {"refreshToken": "x"}, request_factory, sentinel
-    )
+    out = inactive.external_refresh({"refreshToken": "x"}, request_factory, sentinel)
     assert out is sentinel
 
 
@@ -468,9 +452,7 @@ def test_external_verify_returns_user_and_payload_for_owned_token(
             "saleor.plugins.fief.plugin.is_owner_of_token_valid",
             return_value=True,
         ),
-        patch(
-            "saleor.plugins.fief.plugin.jwt_decode", return_value=payload
-        ),
+        patch("saleor.plugins.fief.plugin.jwt_decode", return_value=payload),
         patch(
             "saleor.plugins.fief.plugin.get_user_from_payload",
             return_value=user,
@@ -490,9 +472,7 @@ def test_external_verify_returns_previous_value_when_token_not_owned(
         "saleor.plugins.fief.plugin.is_owner_of_token_valid",
         return_value=False,
     ):
-        result = plugin.external_verify(
-            {"token": "x"}, request_factory, sentinel
-        )
+        result = plugin.external_verify({"token": "x"}, request_factory, sentinel)
     assert result is sentinel
 
 

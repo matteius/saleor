@@ -74,10 +74,7 @@ def test_sha256_hex_empty_body():
     digest = sha256_hex(body)
 
     # then — RFC test vector for SHA-256("")
-    assert (
-        digest
-        == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    )
+    assert digest == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 
 def test_sha256_hex_known_input():
@@ -88,10 +85,7 @@ def test_sha256_hex_known_input():
     digest = sha256_hex(body)
 
     # then — RFC test vector for SHA-256("abc")
-    assert (
-        digest
-        == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-    )
+    assert digest == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 
 
 def test_canonical_sign_string_shape():
@@ -233,16 +227,11 @@ def test_authentication_url_request_shape(client):
 
     call = session.request.call_args
     assert call.kwargs["method"] == "POST"
-    assert call.kwargs["url"].endswith(
-        "/api/auth/external-authentication-url"
-    )
+    assert call.kwargs["url"].endswith("/api/auth/external-authentication-url")
     headers = call.kwargs["headers"]
     assert "X-Fief-Plugin-Timestamp" in headers
     assert "X-Fief-Plugin-Signature" in headers
-    assert (
-        headers["X-Fief-Plugin-Saleor-Url"]
-        == "https://shop.example.com/graphql/"
-    )
+    assert headers["X-Fief-Plugin-Saleor-Url"] == "https://shop.example.com/graphql/"
     assert headers["X-Fief-Plugin-Channel"] == "default"
     assert headers["X-Fief-Plugin-Connection"] == "conn_abc"
     # Body is JSON-encoded with the expected fields.
@@ -282,9 +271,7 @@ def test_obtain_access_tokens_request_shape(client):
     assert result.fief_refresh_token == "fief-refresh"
     assert result.claims["email"] == "user@example.com"
     call = session.request.call_args
-    assert call.kwargs["url"].endswith(
-        "/api/auth/external-obtain-access-tokens"
-    )
+    assert call.kwargs["url"].endswith("/api/auth/external-obtain-access-tokens")
     body = json.loads(call.kwargs["data"])
     assert body["code"] == "auth-code"
     assert body["state"] == "opaque-state"
