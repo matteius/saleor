@@ -15,6 +15,7 @@ from ..core.telemetry import initialize_telemetry
 from .asgi_handler import get_asgi_application
 from .cors_handler import cors_handler
 from .gzip_compression import gzip_compression
+from .health_check import health_check as health_check
 from .telemetry import telemetry_middleware
 from .usage_telemetry import usage_telemetry_middleware
 
