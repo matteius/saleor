@@ -17,13 +17,14 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-install-project --no-editable
 
 ### Final image
-FROM python:3.12-slim
+FROM python:3.12-slim-trixie
 
 RUN groupadd -r saleor && useradd -r -g saleor saleor
 
 # Pillow dependencies
 RUN apt-get update \
   && apt-get install -y \
+  libbrotli1=1.1.0-2+deb13u1 \
   libffi8 \
   libgdk-pixbuf-2.0-0 \
   liblcms2-2 \
