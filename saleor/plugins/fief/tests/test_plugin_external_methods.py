@@ -141,7 +141,7 @@ def test_explicit_storefront_api_url_is_preserved(plugin, settings):
 
 
 @pytest.mark.parametrize(
-    "channel,expected", [(None, "dashboard-channel"), ("eu", "eu")]
+    ("channel", "expected"), [(None, "dashboard-channel"), ("eu", "eu")]
 )
 def test_dashboard_auth_uses_configured_channel_without_overriding_storefront(
     plugin, request_factory, channel, expected
