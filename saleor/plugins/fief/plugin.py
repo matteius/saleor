@@ -77,6 +77,7 @@ class FiefPlugin(BasePlugin):
             apps_fief_base_url=configuration.get("apps_fief_base_url") or "",
             hmac_secret=configuration.get("hmac_secret") or "",
             default_connection_id=configuration.get("default_connection_id"),
+            default_channel_slug=configuration.get("default_channel_slug") or None,
         )
         # Defer client instantiation until the plugin is actually configured;
         # this keeps ``manage.py check`` and the dashboard plugin list happy
@@ -190,7 +191,7 @@ class FiefPlugin(BasePlugin):
         response = client.authentication_url(
             redirect_uri=redirect_uri,
             saleor_user_id=data.get("saleorUserId"),
-            channel_slug=data.get("channelSlug"),
+            channel_slug=data.get("channelSlug") or self.config.default_channel_slug,
         )
         return {"authorizationUrl": response.authorization_url}
 
@@ -226,7 +227,7 @@ class FiefPlugin(BasePlugin):
         response = client.obtain_access_tokens(
             code=code,
             state=state,
-            channel_slug=data.get("channelSlug"),
+            channel_slug=data.get("channelSlug") or self.config.default_channel_slug,
         )
 
         user = self._get_or_create_user(response.claims)
@@ -253,7 +254,7 @@ class FiefPlugin(BasePlugin):
         client = self._get_client(saleor_api_url=saleor_api_url)
         response = client.refresh(
             refresh_token=refresh_token,
-            channel_slug=data.get("channelSlug"),
+            channel_slug=data.get("channelSlug") or self.config.default_channel_slug,
         )
 
         if response.logout_required:
@@ -282,7 +283,8 @@ class FiefPlugin(BasePlugin):
             client = self._get_client(saleor_api_url=saleor_api_url)
             client.logout(
                 refresh_token=data.get("refreshToken"),
-                channel_slug=data.get("channelSlug"),
+                channel_slug=data.get("channelSlug")
+                or self.config.default_channel_slug,
             )
         except Exception:
             # Logout is best-effort. Saleor must finish logging the user

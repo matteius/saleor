@@ -19,9 +19,18 @@ DEFAULT_CONFIGURATION = [
     {"name": "apps_fief_base_url", "value": None},
     {"name": "hmac_secret", "value": None},
     {"name": "default_connection_id", "value": None},
+    {"name": "default_channel_slug", "value": None},
 ]
 
 CONFIG_STRUCTURE = {
+    "default_channel_slug": {
+        "type": ConfigurationTypeField.STRING,
+        "help_text": (
+            "Channel used for dashboard authentication and other clients that "
+            "do not supply a channel. Existing channel connection rules still apply."
+        ),
+        "label": "Default authentication channel (optional)",
+    },
     "apps_fief_base_url": {
         "type": ConfigurationTypeField.STRING,
         "help_text": (

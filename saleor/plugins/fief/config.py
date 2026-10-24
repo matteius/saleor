@@ -24,3 +24,4 @@ class FiefPluginConfig:
     apps_fief_base_url: str
     hmac_secret: str
     default_connection_id: str | None = None
+    default_channel_slug: str | None = None

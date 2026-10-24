@@ -140,6 +140,29 @@ def test_explicit_storefront_api_url_is_preserved(plugin, settings):
     )
 
 
+@pytest.mark.parametrize(
+    "channel,expected", [(None, "dashboard-channel"), ("eu", "eu")]
+)
+def test_dashboard_auth_uses_configured_channel_without_overriding_storefront(
+    plugin, request_factory, channel, expected
+):
+    plugin.config.default_channel_slug = "dashboard-channel"
+    client = MagicMock()
+    client.authentication_url.return_value = AuthenticationUrlResponse(
+        authorization_url="https://fief.example/authorize"
+    )
+    with patch.object(plugin, "_get_client", return_value=client):
+        plugin.external_authentication_url(
+            {
+                "redirectUri": "https://admin.example.com/callback/",
+                "channelSlug": channel,
+            },
+            request_factory,
+            None,
+        )
+    assert client.authentication_url.call_args.kwargs["channel_slug"] == expected
+
+
 def test_external_authentication_url_returns_previous_value_when_inactive(
     request_factory,
 ):
