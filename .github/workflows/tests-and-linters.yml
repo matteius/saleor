@@ -3,13 +3,6 @@ name: Tests & Linters
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-    paths:
-      - "**.py"
-      - Dockerfile
-      - "saleor/**"
-      - .github/workflows/tests-and-linters.yml
-      - pyproject.toml
-      - uv.lock
   push:
     branches:
       - main
@@ -55,6 +48,7 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+
       cache:
         image: valkey/valkey:8.1-alpine
         options: >-
@@ -66,21 +60,33 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Check for changes requiring tests
+        id: changes
+        uses: ./.github/actions/detect-python-changes
+        with:
+          # Re-run whenever this workflow itself changes.
+          additional-file-patterns: '^\.github/workflows/tests-and-linters\.yml$'
+
       - name: Install system dependencies
+        if: steps.changes.outputs.changed == 'true'
         run: |
           apt-get install -y libpq-dev
 
-      - uses: astral-sh/setup-uv@b75a909f75acd358c2196fb9a5f1299a9a8868a4 # v6.0.0
+      - if: steps.changes.outputs.changed == 'true'
+        uses: astral-sh/setup-uv@b75a909f75acd358c2196fb9a5f1299a9a8868a4 # v6.0.0
         with:
           enable-cache: true
 
       - name: Install dependencies
+        if: steps.changes.outputs.changed == 'true'
         run: |
           uv sync --locked
 
       - name: Run unit tests
+        if: steps.changes.outputs.changed == 'true'
         run: |
           uv run pytest \
+            --reuse-db `# retains the DB after tests` \
             -m "not e2e" \
             --junitxml=junit/test-results.xml \
             -o junit_family=legacy \
@@ -88,6 +94,7 @@ jobs:
             -n logical
 
       - name: Upload Test Results
+        if: ${{ !cancelled() && steps.changes.outputs.changed == 'true' }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: pytest-results
@@ -95,23 +102,49 @@ jobs:
           # Throw an error if test results aren't reported. This could happen
           # when bumping dependencies for example.
           if-no-files-found: error
-        if: ${{ always() }}
 
       # Publish detected differences as comment
       - name: Compare DB Queries Results (PR)
+        if: github.event_name == 'pull_request' && github.repository == 'saleor/saleor' && steps.changes.outputs.changed == 'true'
         uses: NyanKiyoshi/pytest-django-queries-ci-tools@45b5ac36ff19669a88fe56429b662b0661d8f46b # v1.1.1
         with:
           query_raw_dump_path: ${{ env.BENCH_PATH }}
           diff_endpoint: "https://dtab784j47g1o.cloudfront.net/default/saleor-db-queries-bot-diff"
           diff_results_base_url: "https://dtab784j47g1o.cloudfront.net"
-        if: github.event_name == 'pull_request' && github.repository == 'saleor/saleor'
 
       - name: Upload DB Queries Results
+        if: steps.changes.outputs.changed == 'true'
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: pytest-django-db-queries-results
           path: ${{ env.BENCH_PATH }}
           if-no-files-found: error
+
+      - if: steps.changes.outputs.changed == 'true'
+        name: Prepare `--no-dev` tests
+        timeout-minutes: 5
+        run: |
+          # Reuse DB generated during `pytest` run in order to avoid having
+          # to run `./manage.py migrate` (slow)
+          echo "DATABASE_URL=postgres://saleor:saleor@postgres:5432/test_saleor_gw0" >> "$GITHUB_ENV"
+          # Uninstall dev dependencies
+          uv sync --locked --no-dev
+
+      # Ensure Saleor & uvicorn can run without development dependencies
+      - if: steps.changes.outputs.changed == 'true'
+        name: Run Unicorn (with --no-dev)
+        timeout-minutes: 2
+        run: |
+          DEBUG=true uv run --no-dev -m saleor.asgi.tests.checks.check_uvicorn_starts
+
+      # Ensure Celery and Beat boot properly without dev dependencies
+      - if: steps.changes.outputs.changed == 'true'
+        name: Run Celery & Beat (with --no-dev)
+        timeout-minutes: 2
+        env:
+          CELERY_BROKER_URL: redis://cache:6379/1
+        run: |
+          DEBUG=true uv run --no-dev -m saleor.core.tests.checks.check_celery_starts
 
   # Uploads the SQL count report for base branches
   upload-query-count-base-branch:

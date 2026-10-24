@@ -32,6 +32,7 @@ from ...payment.interface import (
 from ...product.models import (
     CategoryTranslation,
     CollectionTranslation,
+    ProductMediaTranslation,
     ProductTranslation,
     ProductVariantTranslation,
 )
@@ -99,6 +100,7 @@ TRANSLATIONS_TYPES_MAP = {
     CategoryTranslation: translation_types.CategoryTranslation,
     AttributeTranslation: translation_types.AttributeTranslation,
     AttributeValueTranslation: translation_types.AttributeValueTranslation,
+    ProductMediaTranslation: translation_types.ProductMediaTranslation,
     ProductVariantTranslation: translation_types.ProductVariantTranslation,
     PageTranslation: translation_types.PageTranslation,
     ShippingMethodTranslation: translation_types.ShippingMethodTranslation,
@@ -995,6 +997,23 @@ class ProductVariantMetadataUpdated(SubscriptionObjectType, ProductVariantBase):
         description = "Event sent when product variant metadata is updated."
 
 
+def resolve_variant_from_stock(stock, info: ResolveInfo, channel=None):
+    """Resolve the variant of a stock, tolerating a variant deleted in the meantime.
+
+    Webhook payloads are generated asynchronously, so the variant may already be
+    gone when the subscription query is executed.
+    """
+    return (
+        ProductVariantByIdLoader(info.context)
+        .load(stock.product_variant_id)
+        .then(
+            lambda variant: ChannelContext(node=variant, channel_slug=channel)
+            if variant
+            else None
+        )
+    )
+
+
 class ProductVariantOutOfStock(SubscriptionObjectType, ProductVariantBase):
     warehouse = graphene.Field(
         "saleor.graphql.warehouse.types.Warehouse", description="Look up a warehouse."
@@ -1009,8 +1028,7 @@ class ProductVariantOutOfStock(SubscriptionObjectType, ProductVariantBase):
     @staticmethod
     def resolve_product_variant(root, info: ResolveInfo, channel=None):
         _, stock = root
-        variant = stock.product_variant
-        return ChannelContext(node=variant, channel_slug=channel)
+        return resolve_variant_from_stock(stock, info, channel)
 
     @staticmethod
     def resolve_warehouse(root, _info: ResolveInfo):
@@ -1030,10 +1048,9 @@ class ProductVariantBackInStock(SubscriptionObjectType, ProductVariantBase):
         description = "Event sent when product variant is back in stock."
 
     @staticmethod
-    def resolve_product_variant(root, _info: ResolveInfo, channel=None):
+    def resolve_product_variant(root, info: ResolveInfo, channel=None):
         _, stock = root
-        variant = stock.product_variant
-        return ChannelContext(node=variant, channel_slug=channel)
+        return resolve_variant_from_stock(stock, info, channel)
 
     @staticmethod
     def resolve_warehouse(root, _info):
@@ -1056,11 +1073,7 @@ class ProductVariantStockUpdated(SubscriptionObjectType, ProductVariantBase):
     @staticmethod
     def resolve_product_variant(root, info: ResolveInfo, channel=None):
         _, stock = root
-        return (
-            ProductVariantByIdLoader(info.context)
-            .load(stock.product_variant.id)
-            .then(lambda variant: ChannelContext(node=variant, channel_slug=None))
-        )
+        return resolve_variant_from_stock(stock, info, channel)
 
     @staticmethod
     def resolve_warehouse(root, info: ResolveInfo):
@@ -2051,6 +2064,15 @@ class TransactionActionBase(AbstractType):
         required=True,
         description="Requested action data.",
     )
+    idempotency_key = graphene.String(
+        required=True,
+        description=(
+            "Idempotency key assigned to this requested action. Saleor's delivery "
+            "retries of this request carry the same key, so an app can use it to "
+            "avoid performing the action twice. Requesting the action again is a new "
+            "request and gets a new key." + ADDED_IN_323
+        ),
+    )
 
     @staticmethod
     def resolve_transaction(root, _info: ResolveInfo):
@@ -2063,6 +2085,12 @@ class TransactionActionBase(AbstractType):
         _, transaction_action_data = root
         transaction_action_data: TransactionActionData
         return transaction_action_data
+
+    @staticmethod
+    def resolve_idempotency_key(root, _info: ResolveInfo):
+        _, transaction_action_data = root
+        transaction_action_data: TransactionActionData
+        return transaction_action_data.event.idempotency_key
 
 
 class TransactionChargeRequested(TransactionActionBase, SubscriptionObjectType):

@@ -76,6 +76,7 @@ class ManifestWebhookSchema(BaseModel):
     sync_events: list[str] = []
     custom_headers: dict | None = None
     identifier: str | None = None
+    payload_generation: str | None = None
 
     @field_validator("target_url")
     @classmethod
@@ -108,6 +109,7 @@ class ManifestSchema(BaseModel):
     audience: str | None = None
     required_saleor_version: str | None = None
     author: str | None = None
+    deprecation_reason: str | None = None
     brand: ManifestBrandSchema | None = None
     extensions: DefaultIfNone[list[ManifestExtensionSchema]] = []
     webhooks: DefaultIfNone[list[ManifestWebhookSchema]] = []

@@ -54,10 +54,13 @@ ALL_PRODUCTS_PERMISSIONS = [
 ]
 
 
-class Category(ModelWithMetadata, MPTTModel, SeoModel):
+class Category(ModelWithMetadata, MPTTModel, SeoModel, ModelWithExternalReference):
     name = models.CharField(max_length=250)
     slug = models.SlugField(max_length=255, unique=True, allow_unicode=True)
     description = SanitizedJSONField(blank=True, null=True, sanitizer=clean_editorjs)
+    full_description = SanitizedJSONField(
+        blank=True, null=True, sanitizer=clean_editorjs
+    )
     description_plaintext = TextField(blank=True)
     updated_at = models.DateTimeField(auto_now=True, blank=True, null=True)
     parent = models.ForeignKey(
@@ -93,6 +96,9 @@ class CategoryTranslation(SeoModelTranslationWithSlug):
     )
     name = models.CharField(max_length=128, blank=True, null=True)
     description = SanitizedJSONField(blank=True, null=True, sanitizer=clean_editorjs)
+    full_description = SanitizedJSONField(
+        blank=True, null=True, sanitizer=clean_editorjs
+    )
 
     class Meta:
         constraints = [
@@ -119,6 +125,7 @@ class CategoryTranslation(SeoModelTranslationWithSlug):
             {
                 "name": self.name,
                 "description": self.description,
+                "full_description": self.full_description,
             }
         )
         return translated_keys
@@ -266,7 +273,12 @@ class Product(SeoModel, ModelWithMetadata, ModelWithExternalReference):
 
     @staticmethod
     def sort_by_attribute_fields() -> list:
-        return ["concatenated_values_order", "concatenated_values", "name"]
+        return [
+            "concatenated_values_order",
+            "numeric_value",
+            "concatenated_values",
+            "name",
+        ]
 
 
 class ProductTranslation(SeoModelTranslationWithSlug):
@@ -539,6 +551,8 @@ class ProductVariantChannelListing(models.Model):
 
     preorder_quantity_threshold = models.IntegerField(blank=True, null=True)
 
+    is_available_for_purchase = models.BooleanField(default=True, db_default=True)
+
     objects = managers.ProductVariantChannelListingManager()
 
     class Meta:
@@ -547,6 +561,14 @@ class ProductVariantChannelListing(models.Model):
         indexes = [
             GinIndex(fields=["price_amount", "channel_id"]),
         ]
+
+    @property
+    def is_sellable(self) -> bool:
+        """Whether the variant can be bought in this channel.
+
+        In-Python twin of `managers.sellable_listing_q`; keep the two in sync.
+        """
+        return self.price_amount is not None and self.is_available_for_purchase
 
 
 class VariantChannelListingPromotionRule(models.Model):
@@ -611,6 +633,32 @@ class ProductMedia(SortableModel, ModelWithMetadata):
         super(SortableModel, self).delete(*args, **kwargs)
 
 
+class ProductMediaTranslation(Translation):
+    product_media = models.ForeignKey(
+        ProductMedia, related_name="translations", on_delete=models.CASCADE
+    )
+    alt = models.CharField(max_length=250, blank=True)
+
+    class Meta:
+        unique_together = (("language_code", "product_media"),)
+
+    def __repr__(self):
+        class_ = type(self)
+        return (
+            f"{class_.__name__}(pk={self.pk!r}, alt={self.alt!r}, "
+            f"product_media_pk={self.product_media_id!r})"
+        )
+
+    def __str__(self):
+        return self.alt or str(self.product_media)
+
+    def get_translated_object_id(self):
+        return "ProductMedia", self.product_media_id
+
+    def get_translated_keys(self):
+        return {"alt": self.alt}
+
+
 class VariantMedia(models.Model):
     variant = models.ForeignKey(
         "ProductVariant", related_name="variant_media", on_delete=models.CASCADE
@@ -638,7 +686,7 @@ class CollectionProduct(SortableModel):
         return self.product.collectionproduct.all()
 
 
-class Collection(SeoModel, ModelWithMetadata):
+class Collection(SeoModel, ModelWithMetadata, ModelWithExternalReference):
     name = models.CharField(max_length=250)
     slug = models.SlugField(max_length=255, unique=True, allow_unicode=True)
     products = models.ManyToManyField(
@@ -654,6 +702,9 @@ class Collection(SeoModel, ModelWithMetadata):
     background_image_alt = models.CharField(max_length=128, blank=True)
 
     description = SanitizedJSONField(blank=True, null=True, sanitizer=clean_editorjs)
+    full_description = SanitizedJSONField(
+        blank=True, null=True, sanitizer=clean_editorjs
+    )
 
     objects = managers.CollectionManager()
 
@@ -700,6 +751,9 @@ class CollectionTranslation(SeoModelTranslationWithSlug):
     )
     name = models.CharField(max_length=128, blank=True, null=True)
     description = SanitizedJSONField(blank=True, null=True, sanitizer=clean_editorjs)
+    full_description = SanitizedJSONField(
+        blank=True, null=True, sanitizer=clean_editorjs
+    )
 
     class Meta:
         constraints = [
@@ -726,6 +780,7 @@ class CollectionTranslation(SeoModelTranslationWithSlug):
             {
                 "name": self.name,
                 "description": self.description,
+                "full_description": self.full_description,
             }
         )
         return translated_keys

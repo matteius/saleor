@@ -15,7 +15,7 @@ from ...core.utils import build_absolute_uri
 from ...permission.auth_filters import AuthorizationFilters, is_staff_user
 from ...permission.enums import AccountPermissions, AppPermission
 from ...permission.utils import message_one_of_permissions_required
-from ...thumbnail import PIL_IDENTIFIER_TO_MIME_TYPE
+from ...thumbnail import PIL_IDENTIFIER_TO_MIME_TYPE, ThumbnailSizeRounding
 from ...thumbnail.utils import (
     ProcessedIconImage,
     get_icon_thumbnail_format,
@@ -355,6 +355,7 @@ class AppManifestBrandLogo(BaseObjectType):
         _info: ResolveInfo,
         *,
         size: int | None = None,
+        size_rounding: ThumbnailSizeRounding | None = None,
         format: str | None = None,
     ):
         format = get_icon_thumbnail_format(format)
@@ -362,7 +363,7 @@ class AppManifestBrandLogo(BaseObjectType):
         # as text and used for preview purposes only
         if size == 0:
             size = MANIFEST_THUMBNAIL_MAX_SIZE
-        size = min(get_thumbnail_size(size), MANIFEST_THUMBNAIL_MAX_SIZE)
+        size = min(get_thumbnail_size(size, size_rounding), MANIFEST_THUMBNAIL_MAX_SIZE)
 
         logo_img = root["default"]
         # prepare thumbnail on the fly
@@ -391,6 +392,7 @@ class AppBrandLogo(BaseObjectType):
         info: ResolveInfo,
         *,
         size: int | None = None,
+        size_rounding: ThumbnailSizeRounding | None = None,
         format: str | None = None,
     ):
         if not root.brand_logo_default:
@@ -399,7 +401,7 @@ class AppBrandLogo(BaseObjectType):
             return build_absolute_uri(root.brand_logo_default.url)
 
         format = get_thumbnail_format(format)
-        selected_size = get_thumbnail_size(size)
+        selected_size = get_thumbnail_size(size, size_rounding)
 
         if isinstance(root, models.App):
             object_type = "App"
@@ -483,6 +485,15 @@ class Manifest(BaseObjectType):
         deprecation_reason="Use `dataPrivacyUrl` instead.",
     )
     data_privacy_url = graphene.String(description="URL to the full privacy policy.")
+    deprecation_reason = graphene.String(
+        description=(
+            "Reason why the app is deprecated, declared in the manifest. "
+            "Null when the app is not deprecated. A deprecated app can still "
+            "be installed and works as usual, but usually means it should not "
+            "be used anymore." + ADDED_IN_323
+        ),
+        required=False,
+    )
     homepage_url = graphene.String(description="External URL to the app homepage.")
     support_url = graphene.String(
         description="External URL to the page where app users can find support."
@@ -709,6 +720,15 @@ class App(ModelObjectType[models.App]):
         description="JWT token used to authenticate by third-party app."
     )
     author = graphene.String(description="The App's author name.")
+    deprecation_reason = graphene.String(
+        description=(
+            "Reason why the app is deprecated, set by the app itself. "
+            "Null when the app is not deprecated. A deprecated app keeps "
+            "working as usual, but usually means it should not be used "
+            "anymore." + ADDED_IN_323
+        ),
+        required=False,
+    )
     extensions = NonNullList(
         AppExtension,
         description="App's dashboard extensions.",

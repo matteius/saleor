@@ -17,13 +17,18 @@ from django.db.models import (
 )
 from django.db.models.functions import Coalesce
 
+from ...product.managers import sellable_listing_q
 from ...product.models import (
     Category,
     CollectionChannelListing,
     Product,
     ProductChannelListing,
 )
-from ..core.descriptions import ADDED_IN_323, CHANNEL_REQUIRED
+from ..core.descriptions import (
+    ADDED_IN_323,
+    CHANNEL_REQUIRED,
+    DEPRECATED_PRODUCT_RATING,
+)
 from ..core.doc_category import DOC_CATEGORY_PRODUCTS
 from ..core.types import BaseEnum, ChannelSortInputObjectType, SortInputObjectType
 
@@ -211,6 +216,7 @@ class ProductOrderField(BaseEnum):
             ProductOrderField.DATE.name: "Use `LAST_MODIFIED` instead.",  # type: ignore[attr-defined] # graphene.Enum is not typed # noqa: E501
             ProductOrderField.PUBLICATION_DATE.name: "Use `PUBLISHED_AT` instead.",  # type: ignore[attr-defined] # graphene.Enum is not typed # noqa: E501
             ProductOrderField.LAST_MODIFIED.name: "Use `LAST_MODIFIED_AT` instead.",  # type: ignore[attr-defined] # graphene.Enum is not typed # noqa: E501
+            ProductOrderField.RATING.name: DEPRECATED_PRODUCT_RATING,  # type: ignore[attr-defined] # graphene.Enum is not typed # noqa: E501
         }
         if self.name in deprecations:
             return deprecations[self.name]
@@ -222,7 +228,7 @@ class ProductOrderField(BaseEnum):
             min_variants_price_amount=Min(
                 "variants__channel_listings__price_amount",
                 filter=Q(variants__channel_listings__channel__slug=str(channel_slug))
-                & Q(variants__channel_listings__price_amount__isnull=False),
+                & sellable_listing_q("variants__channel_listings__"),
             )
         )
 
