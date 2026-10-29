@@ -893,7 +893,11 @@ def SENTRY_INIT(dsn: str, sentry_opts: dict):
 
     sentry_sdk.init(
         dsn,
-        release=__version__,
+        release=os.environ.get("SENTRY_RELEASE") or __version__,
+        environment=os.environ.get("SENTRY_ENVIRONMENT", "production"),
+        traces_sample_rate=0.1,
+        max_request_body_size="never",
+        include_local_variables=False,
         send_default_pii=False,
         event_scrubber=EventScrubber(
             denylist=SALEOR_DENYLIST,
