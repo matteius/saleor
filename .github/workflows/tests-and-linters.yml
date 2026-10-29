@@ -19,6 +19,8 @@ env:
   CACHE_URL: "redis://cache:6379/0"
   DATABASE_URL: "postgres://saleor:saleor@postgres:5432/saleor"
   SECRET_KEY: ci-test
+  # Keep unit/integration failures in the CI reports instead of production telemetry.
+  SENTRY_DSN: ""
 
 # Will group same workflow in the PR. Once new commit is pushed, old workflow will be cancelled
 # This is saving resources and prevents unnecessary queues when fresh jobs wait for stale ones
