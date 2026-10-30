@@ -110,6 +110,9 @@ permissions.
 
 ### Other changes
 
+- Batch nested unfiltered `Product.productVariants` first pages and their total counts by channel and page size, preserving keyset pagination and product visibility.
+- Reuse default-channel selection within GraphQL query requests to avoid repeated channel queries in nested fields; later requests still observe channel changes.
+
 - Fix Google OAuth OIDC login failing with `invalid_scope` error when `enable_refresh_token` is enabled. Google does not support the `offline_access` scope; use `access_type=offline` authorization parameter instead. - #18919 by @dnplkndll
 - Add `saleor.graphql.field.usage` OTel metric to track GraphQL field resolver call counts. The metric is emitted for deprecated fields (detected automatically) and for fields explicitly opted in with `monitor_usage=True` on a `BaseField` declaration.
 - Fix send order confirmation email to staff - #18342 by @Shaokun-X
