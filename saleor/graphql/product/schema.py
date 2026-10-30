@@ -410,7 +410,7 @@ class ProductQueries(graphene.ObjectType):
 
         if channel is None and not has_required_permissions:
             channel = get_default_channel_slug_or_graphql_error(
-                allow_replica=info.context.allow_replica
+                allow_replica=info.context.allow_replica, context=info.context
             )
         if id:
             _, id = from_global_id_or_error(id, Collection)
@@ -446,7 +446,7 @@ class ProductQueries(graphene.ObjectType):
         )
         if channel is None and not has_required_permissions:
             channel = get_default_channel_slug_or_graphql_error(
-                allow_replica=info.context.allow_replica
+                allow_replica=info.context.allow_replica, context=info.context
             )
         qs = resolve_collections(info, channel)
         kwargs["channel"] = channel
@@ -479,7 +479,7 @@ class ProductQueries(graphene.ObjectType):
         limited_channel_access = False if channel is None else True
         if channel is None and not has_required_permissions:
             channel = get_default_channel_slug_or_graphql_error(
-                allow_replica=info.context.allow_replica
+                allow_replica=info.context.allow_replica, context=info.context
             )
 
         def _resolve_product(channel_obj):
@@ -521,7 +521,7 @@ class ProductQueries(graphene.ObjectType):
         limited_channel_access = False if channel is None else True
         if channel is None and not has_required_permissions:
             channel = get_default_channel_slug_or_graphql_error(
-                allow_replica=info.context.allow_replica
+                allow_replica=info.context.allow_replica, context=info.context
             )
 
         def _resolve_products(channel_obj):
@@ -579,7 +579,7 @@ class ProductQueries(graphene.ObjectType):
         limited_channel_access = False if channel is None else True
         if channel is None and not has_required_permissions:
             channel = get_default_channel_slug_or_graphql_error(
-                allow_replica=info.context.allow_replica
+                allow_replica=info.context.allow_replica, context=info.context
             )
 
         def _resolve_product_variant(channel_obj):
@@ -616,7 +616,7 @@ class ProductQueries(graphene.ObjectType):
         limited_channel_access = False if channel is None else True
         if channel is None and not has_required_permissions:
             channel = get_default_channel_slug_or_graphql_error(
-                allow_replica=info.context.allow_replica
+                allow_replica=info.context.allow_replica, context=info.context
             )
 
         search = kwargs.get("search")

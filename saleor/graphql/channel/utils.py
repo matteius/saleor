@@ -13,14 +13,38 @@ from ...shipping.models import ShippingZone
 
 def get_default_channel_slug_or_graphql_error(
     allow_replica: bool = False,
+    *,
+    context=None,
 ) -> SimpleLazyObject:
     """Return a default channel slug in lazy way or a GraphQL error.
 
     Utility to get the default channel in GraphQL query resolvers.
     """
-    return SimpleLazyObject(
-        lambda: get_default_channel_or_graphql_error(allow_replica).slug
-    )
+    if context is None:
+        return SimpleLazyObject(
+            lambda: get_default_channel_or_graphql_error(allow_replica).slug
+        )
+    # Query resolvers share the request context, like dataloaders. Cache both a
+    # successful lookup and a missing/ambiguous default only within that request;
+    # another request must observe channel changes immediately.
+    cache = getattr(context, "_default_channel_slugs", None)
+    if cache is None:
+        cache = context._default_channel_slugs = {}
+    if allow_replica not in cache:
+        failure = None
+
+        def resolve_slug():
+            nonlocal failure
+            if failure is not None:
+                raise GraphQLError(failure)
+            try:
+                return get_default_channel_or_graphql_error(allow_replica).slug
+            except GraphQLError as error:
+                failure = error.message
+                raise
+
+        cache[allow_replica] = SimpleLazyObject(resolve_slug)
+    return cache[allow_replica]
 
 
 def get_default_channel_or_graphql_error(allow_replica: bool = False) -> Channel:

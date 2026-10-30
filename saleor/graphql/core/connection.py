@@ -313,6 +313,28 @@ def connection_from_queryset_slice(
     )
 
 
+def create_first_page_from_bounded_rows(
+    rows, total_count, sorting_fields, info, args, connection_type, channel_slug
+):
+    """Use ordinary keyset cursors for a bounded, batched first-page result."""
+    _validate_slice_args(info, args)
+    _validate_connection_args(args)
+    if not args.get("first") or any(
+        args.get(key) for key in ("last", "after", "before")
+    ):
+        raise ValueError("Batched rows require a forward first page")
+    edges, page_info = _get_edges_for_connection(
+        connection_type.Edge, rows, args, sorting_fields
+    )
+    for edge in edges:
+        edge.node = ChannelContext(node=edge.node, channel_slug=channel_slug)
+    return connection_type(
+        edges=edges,
+        page_info=graphene.relay.PageInfo(**page_info),
+        total_count=total_count,
+    )
+
+
 def create_connection_slice(
     iterable,
     info: "ResolveInfo",

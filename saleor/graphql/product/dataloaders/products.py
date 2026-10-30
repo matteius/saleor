@@ -1,7 +1,8 @@
 from collections import defaultdict
 from collections.abc import Iterable
 
-from django.db.models import Exists, F, OuterRef, Q
+from django.db.models import Count, Exists, F, OuterRef, Q, Window
+from django.db.models.functions import RowNumber
 
 from ....core.db.connection import allow_writer_in_context
 from ....product import ProductMediaTypes
@@ -21,6 +22,8 @@ from ....product.models import (
 )
 from ...channel.dataloaders.by_self import ChannelBySlugLoader
 from ...core.dataloaders import BaseThumbnailBySizeAndFormatLoader, DataLoader
+from ...utils import get_user_or_app_from_context
+from ...utils.sorting import sort_queryset_by_default
 
 ProductIdAndChannelSlug = tuple[int, str]
 VariantIdAndChannelSlug = tuple[int, str]
@@ -192,6 +195,58 @@ class ProductVariantByIdLoader(DataLoader[int, ProductVariant]):
             keys
         )
         return [variants.get(key) for key in keys]
+
+
+class ProductVariantFirstPageByProductAndChannelLoader(
+    DataLoader[tuple[int, str, int], tuple[list[ProductVariant], int, list[str]]]
+):
+    """One bounded query per channel/page size, including exact per-product counts."""
+
+    context_key = "product_variant_first_page_by_product_and_channel"
+
+    def batch_load(self, keys):
+        groups = defaultdict(list)
+        for product_id, channel_slug, first in keys:
+            groups[channel_slug, first].append(product_id)
+        channel_slugs = list(dict.fromkeys(key[1] for key in keys))
+        requestor = get_user_or_app_from_context(self.context)
+
+        def with_channels(channels):
+            channel_map = dict(zip(channel_slugs, channels, strict=True))
+            result = {}
+            for (slug, first), product_ids in groups.items():
+                queryset = (
+                    ProductVariant.objects.using(self.database_connection_name)
+                    .visible_to_user(requestor, channel_map[slug], True)
+                    .filter(product_id__in=product_ids)
+                )
+                queryset, sorting = sort_queryset_by_default(queryset, reversed=False)
+                ordering = list(queryset.query.order_by)
+                # Window counts precede the row-number filter: totalCount stays
+                # exact while only first+1 rows per product reach Python.
+                queryset = queryset.annotate(
+                    _page_total=Window(Count("pk"), partition_by=[F("product_id")]),
+                    _page_row=Window(
+                        RowNumber(), partition_by=[F("product_id")], order_by=ordering
+                    ),
+                ).filter(_page_row__lte=first + 1)
+                rows = defaultdict(list)
+                for variant in queryset.iterator(chunk_size=1000):
+                    rows[variant.product_id].append(variant)
+                for product_id in product_ids:
+                    page = rows[product_id]
+                    result[product_id, slug, first] = (
+                        page,
+                        page[0]._page_total if page else 0,
+                        sorting["field"],
+                    )
+            return [result[key] for key in keys]
+
+        return (
+            ChannelBySlugLoader(self.context)
+            .load_many(channel_slugs)
+            .then(with_channels)
+        )
 
 
 class ProductVariantsByProductIdLoader(DataLoader[int, list[ProductVariant]]):

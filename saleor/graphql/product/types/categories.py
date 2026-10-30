@@ -189,7 +189,7 @@ class Category(ModelObjectType[models.Category]):
         limited_channel_access = False if channel is None else True
         if channel is None and not has_required_permissions:
             channel = get_default_channel_slug_or_graphql_error(
-                allow_replica=info.context.allow_replica
+                allow_replica=info.context.allow_replica, context=info.context
             )
         connection_name = get_database_connection_name(info.context)
 
