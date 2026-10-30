@@ -1589,7 +1589,9 @@ class Product(ChannelContextType[models.Product]):
                 .load((root.node.pk, root.channel_slug, first))
                 .then(
                     lambda page: create_first_page_from_bounded_rows(
-                        *page,
+                        page[0],
+                        page[1],
+                        page[2],
                         info,
                         kwargs,
                         ProductVariantCountableConnection,
