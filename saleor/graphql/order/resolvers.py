@@ -59,7 +59,7 @@ def resolve_orders_total(info, period, channel_slug):
     database_connection_name = get_database_connection_name(info.context)
     if channel_slug is None:
         channel_slug = get_default_channel_slug_or_graphql_error(
-            allow_replica=info.context.allow_replica
+            allow_replica=info.context.allow_replica, context=info.context
         )
     channel = (
         Channel.objects.using(database_connection_name)

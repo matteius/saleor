@@ -4,6 +4,7 @@ from dataclasses import asdict
 from decimal import Decimal
 
 import graphene
+from django.conf import settings
 from graphene import relay
 from promise import Promise
 
@@ -58,6 +59,7 @@ from ...channel.utils import get_default_channel_slug_or_graphql_error
 from ...core.connection import (
     CountableConnection,
     create_connection_slice,
+    create_first_page_from_bounded_rows,
     filter_connection_queryset,
 )
 from ...core.const import DEFAULT_NESTED_LIST_LIMIT
@@ -156,6 +158,7 @@ from ..dataloaders import (
     ProductChannelListingByProductIdLoader,
     ProductTypeByIdLoader,
     ProductVariantByIdLoader,
+    ProductVariantFirstPageByProductAndChannelLoader,
     ProductVariantsByProductIdLoader,
     ThumbnailByProductMediaIdSizeAndFormatLoader,
     VariantAttributesAllByProductTypeIdLoader,
@@ -1567,6 +1570,33 @@ class Product(ChannelContextType[models.Product]):
 
     @staticmethod
     def resolve_product_variants(root: ChannelContext[models.Product], info, **kwargs):
+        first = kwargs.get("first")
+        if (
+            root.channel_slug
+            and isinstance(first, int)
+            and first > 0
+            and (
+                not settings.GRAPHQL_PAGINATION_LIMIT
+                or first <= settings.GRAPHQL_PAGINATION_LIMIT
+            )
+            and not any(
+                kwargs.get(key)
+                for key in ("last", "after", "before", "filter", "where", "sort_by")
+            )
+        ):
+            return (
+                ProductVariantFirstPageByProductAndChannelLoader(info.context)
+                .load((root.node.pk, root.channel_slug, first))
+                .then(
+                    lambda page: create_first_page_from_bounded_rows(
+                        *page,
+                        info,
+                        kwargs,
+                        ProductVariantCountableConnection,
+                        root.channel_slug,
+                    )
+                )
+            )
         requestor = get_user_or_app_from_context(info.context)
 
         def _resolve_product_variants(channel_obj):
@@ -2024,7 +2054,7 @@ class ProductType(ModelObjectType[models.ProductType]):
         limited_channel_access = False if channel is None else True
         if channel is None:
             channel = get_default_channel_slug_or_graphql_error(
-                allow_replica=info.context.allow_replica
+                allow_replica=info.context.allow_replica, context=info.context
             )
 
         def _resolve_products(channel_obj):
